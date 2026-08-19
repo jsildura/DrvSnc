@@ -309,12 +309,43 @@ async function callSeedrApi(
   }
 
   if (!res.ok) {
-    throw new Error(`Seedr API request failed (${res.status})`);
+    let errorDetail = `Seedr API request failed (${res.status})`;
+    try {
+      const errJson = (await res.json()) as Record<string, any>;
+      if (errJson && (errJson.error || errJson.message || errJson.result)) {
+        errorDetail = String(errJson.error || errJson.message || errJson.result);
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(errorDetail);
   }
 
-  const json = (await res.json()) as Record<string, any>;
-  if (json.result === false && json.error) {
-    throw new Error(String(json.error || 'Seedr operation failed'));
+  let json: Record<string, any> = {};
+  try {
+    json = (await res.json()) as Record<string, any>;
+  } catch {
+    throw new Error(`Seedr API returned invalid JSON (${res.status})`);
+  }
+
+  if (
+    json.result === false ||
+    (typeof json.result === 'string' && json.result.toLowerCase() !== 'true') ||
+    (json.code && json.code >= 400)
+  ) {
+    const rawError = json.error || json.result || json.message || 'Seedr operation failed';
+    const errStr = String(rawError).toLowerCase();
+
+    if (errStr.includes('not_enough_space') || errStr.includes('space') || json.code === 402) {
+      throw new Error('This torrent exceeds your available Seedr storage quota (3.50 GB max).');
+    }
+    if (errStr.includes('queue_full') || errStr.includes('slot') || json.code === 409) {
+      throw new Error('Seedr download slot is currently busy. Free accounts allow 1 active torrent at a time.');
+    }
+    if (errStr.includes('invalid_magnet') || errStr.includes('magnet')) {
+      throw new Error('The provided magnet link is invalid.');
+    }
+    throw new Error(String(json.error || json.message || json.result || 'Seedr operation failed'));
   }
 
   return json;
@@ -327,8 +358,8 @@ export async function addSeedrMagnet(
   env: Env,
   userId: string,
   magnetLink: string,
-  folderId = '0'
-): Promise<{ result: boolean; user_torrent_id?: number | string; title?: string }> {
+  folderId = '-1'
+): Promise<{ result: boolean; user_torrent_id?: number | string; title?: string; torrent_hash?: string }> {
   return callSeedrApi(env, userId, 'add_torrent', {
     torrent_magnet: magnetLink,
     folder_id: folderId,
@@ -343,7 +374,11 @@ export async function getSeedrContents(
   userId: string,
   folderId = '0'
 ): Promise<SeedrContentsResponse> {
-  const data = await callSeedrApi(env, userId, 'list_contents', { folder_id: folderId });
+  const data = await callSeedrApi(env, userId, 'list_contents', {
+    content_type: 'folder',
+    content_id: folderId,
+    folder_id: folderId,
+  });
   return {
     space_used: data.space_used || data.space_used_in_bytes,
     space_max: data.space_max || data.space_max_in_bytes,
@@ -378,7 +413,9 @@ export async function createSeedrArchiveUrl(
   userId: string,
   folderId: string | number
 ): Promise<string> {
+  const archiveArr = JSON.stringify([{ type: 'folder', id: Number(folderId) || folderId }]);
   const data = await callSeedrApi(env, userId, 'create_archive', {
+    archive_arr: archiveArr,
     folder_id: String(folderId),
   });
   const url = data.archive_url || data.url;

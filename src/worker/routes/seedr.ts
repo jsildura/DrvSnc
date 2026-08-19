@@ -224,7 +224,7 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
       }
 
       // Cleanup item from Seedr cloud in background to free quota
-      if (seedrItemId) {
+      if (seedrItemId && c.executionCtx) {
         c.executionCtx.waitUntil(
           deleteSeedrItem(c.env, user.id, seedrItemType, seedrItemId)
         );
@@ -250,7 +250,7 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
   } catch (err) {
     return c.json(
       { error: (err as Error).message || 'Failed to process magnet link on Seedr' },
-      500
+      400
     );
   }
 });
