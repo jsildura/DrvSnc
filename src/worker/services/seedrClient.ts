@@ -248,7 +248,8 @@ async function callSeedrApi(
   env: Env,
   userId: string,
   action: string,
-  formData: Record<string, string>
+  params: Record<string, string> = {},
+  method: 'GET' | 'POST' = 'POST'
 ): Promise<any> {
   const creds = await getSeedrCredentials(env, userId);
   if (!creds) {
@@ -256,7 +257,28 @@ async function callSeedrApi(
   }
 
   const doRequest = async (token: string) => {
-    const body = new URLSearchParams({ action, ...formData });
+    if (method === 'GET') {
+      const url = new URL(RESOURCE_URL);
+      url.searchParams.set('action', action);
+      url.searchParams.set('func', action);
+      url.searchParams.set('access_token', token);
+      for (const [k, v] of Object.entries(params)) {
+        url.searchParams.set(k, v);
+      }
+      return fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    }
+
+    const body = new URLSearchParams({
+      action,
+      func: action,
+      access_token: token,
+      ...params,
+    });
     return fetch(RESOURCE_URL, {
       method: 'POST',
       headers: {
@@ -401,26 +423,65 @@ export async function getSeedrSettings(
   env: Env,
   userId: string
 ): Promise<SeedrAccountSettings> {
-  const data = await callSeedrApi(env, userId, 'get_settings', {});
-  const account = data.account || {};
+  // Try get_settings (GET and POST fallback)
+  let settingsData: any = {};
+  try {
+    settingsData = await callSeedrApi(env, userId, 'get_settings', {}, 'GET');
+  } catch {
+    try {
+      settingsData = await callSeedrApi(env, userId, 'get_settings', {}, 'POST');
+    } catch {
+      settingsData = {};
+    }
+  }
+
+  // Try get_memory_bandwidth (GET and POST fallback)
+  let bandwidthData: any = {};
+  try {
+    bandwidthData = await callSeedrApi(env, userId, 'get_memory_bandwidth', {}, 'GET');
+  } catch {
+    try {
+      bandwidthData = await callSeedrApi(env, userId, 'get_memory_bandwidth', {}, 'POST');
+    } catch {
+      bandwidthData = {};
+    }
+  }
+
+  const account = settingsData.account || settingsData.settings?.account || {};
   const isPremium =
     account.premium === 1 ||
     account.premium === true ||
-    data.is_premium === 1 ||
-    data.is_premium === true;
+    bandwidthData.is_premium === 1 ||
+    bandwidthData.is_premium === true ||
+    settingsData.is_premium === 1;
+
   const packageName =
-    account.package_name || (isPremium ? 'Premium' : 'Free');
-  const spaceUsed = Number(account.space_used || data.space_used || 0);
-  const spaceMax = Number(account.space_max || data.space_max || 2147483648);
+    account.package_name ||
+    bandwidthData.package_name ||
+    (isPremium ? 'Premium' : 'Free');
+
+  const spaceUsed = Number(
+    bandwidthData.space_used ??
+    account.space_used ??
+    settingsData.space_used ??
+    0
+  );
+
+  const spaceMax = Number(
+    bandwidthData.space_max ??
+    account.space_max ??
+    settingsData.space_max ??
+    2147483648
+  );
 
   return {
-    username: account.username || account.email,
-    email: account.email,
+    username: account.username || account.email || settingsData.username,
+    email: account.email || settingsData.email,
     isPremium,
     packageName,
     spaceUsed,
     spaceMax,
-    bandwidthUsed: account.bandwidth_used,
-    bandwidthMax: data.bandwidth_max,
+    bandwidthUsed: bandwidthData.bandwidth_used ?? account.bandwidth_used,
+    bandwidthMax: bandwidthData.bandwidth_max,
   };
 }
