@@ -7,6 +7,7 @@ import {
 } from '../api/jobs';
 import { uploadFileMultipart } from './multipartUpload';
 import { validateRemoteUrl } from '../../worker/services/remoteUrlPolicy';
+import { FolderPicker } from '../components/FolderPicker';
 import { BatchImporter } from './BatchImporter';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GiB
@@ -24,6 +25,8 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
   // Remote upload state
   const [remoteUrl, setRemoteUrl] = useState('');
   const [customFilename, setCustomFilename] = useState('');
+  const [remoteFolderId, setRemoteFolderId] = useState<string | undefined>(undefined);
+  const [remoteFolderName, setRemoteFolderName] = useState('My Drive (Root)');
   const [isSubmittingRemote, setIsSubmittingRemote] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
 
@@ -92,10 +95,13 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
       await createRemoteUploadJob({
         url: remoteUrl.trim(),
         filename: customFilename.trim() || undefined,
+        folderId: remoteFolderId || undefined,
       });
 
       setRemoteUrl('');
       setCustomFilename('');
+      // The destination is deliberately left as-is: sending several files to the same
+      // folder is the common case, and re-picking it every time would be busywork.
       onJobCreated();
     } catch (err) {
       setRemoteError((err as Error).message || 'Failed to submit remote upload');
@@ -257,6 +263,16 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
           {remoteError && (
             <p className="text-xs text-rose-500 font-medium">{remoteError}</p>
           )}
+
+          {/* Destination Folder Selector */}
+          <FolderPicker
+            selectedFolderId={remoteFolderId}
+            selectedFolderName={remoteFolderName}
+            onSelect={(folderId, folderName) => {
+              setRemoteFolderId(folderId);
+              setRemoteFolderName(folderName);
+            }}
+          />
 
           <button
             type="submit"
