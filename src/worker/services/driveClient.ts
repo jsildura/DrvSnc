@@ -31,31 +31,43 @@ export function escapeQueryString(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-export function getExportMimeType(mimeType: string, requestedMimeType?: string): string | null {
-  const exportsMap: Record<string, string[]> = {
-    'application/vnd.google-apps.document': [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'text/plain',
-    ],
-    'application/vnd.google-apps.spreadsheet': [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/csv',
-    ],
-    'application/vnd.google-apps.presentation': [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    ],
-    'application/vnd.google-apps.drawing': [
-      'application/pdf',
-      'image/png',
-      'image/jpeg',
-      'image/svg+xml',
-    ],
-  };
+// Google Workspace documents have no binary content, so `alt=media` never works on
+// them — they have to go through /export with one of these MIME types. Order matters:
+// the first entry is what we export as by default, and the rest are tried in turn if
+// Google refuses the preferred one.
+const WORKSPACE_EXPORT_MIME_TYPES: Record<string, string[]> = {
+  'application/vnd.google-apps.document': [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain',
+  ],
+  'application/vnd.google-apps.spreadsheet': [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
+  ],
+  'application/vnd.google-apps.presentation': [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ],
+  'application/vnd.google-apps.drawing': [
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/svg+xml',
+  ],
+};
 
-  const allowed = exportsMap[mimeType];
+/**
+ * Every MIME type `mimeType` can be exported as, preferred first, or null if it is
+ * not a Workspace type (i.e. it should be downloaded with alt=media instead).
+ */
+export function getExportMimeTypes(mimeType: string): string[] | null {
+  return WORKSPACE_EXPORT_MIME_TYPES[mimeType] ?? null;
+}
+
+export function getExportMimeType(mimeType: string, requestedMimeType?: string): string | null {
+  const allowed = getExportMimeTypes(mimeType);
   if (!allowed) return null;
 
   if (requestedMimeType && allowed.includes(requestedMimeType)) {
@@ -764,6 +776,34 @@ export async function removePermission(
   });
 }
 
+/**
+ * Fetch a single file's metadata. Unlike `getFolder` this makes no assertion about what
+ * kind of item it is — the download route uses it purely to learn the mimeType so it can
+ * decide between alt=media and /export.
+ */
+export async function getFileMetadata(
+  env: Env,
+  userId: string,
+  fileId: string
+): Promise<DriveItemView> {
+  return withDriveAuth(env, userId, async (token) => {
+    const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`);
+    url.searchParams.set('fields', DRIVE_FILE_FIELDS);
+    url.searchParams.set('supportsAllDrives', 'true');
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const mapped = mapDriveError(res.status);
+      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+    }
+
+    return normalizeDriveItem((await res.json()) as Record<string, unknown>);
+  });
+}
+
 export async function downloadFile(
   env: Env,
   userId: string,
@@ -786,7 +826,16 @@ export async function downloadFile(
   });
 }
 
-export async function exportFile(
+/**
+ * Backoff before re-attempting an export. Google throttles on-the-fly conversion
+ * fairly aggressively, and a rendered document is worth waiting a few hundred ms for.
+ * The length of this array also caps the number of retries per MIME type.
+ */
+const EXPORT_RETRY_DELAYS_MS = [200, 600];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function exportFileOnce(
   env: Env,
   userId: string,
   fileId: string,
@@ -802,11 +851,62 @@ export async function exportFile(
 
     if (!res.ok) {
       const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      // Name the format in the message: "could not export as application/pdf" tells
+      // the caller far more than a bare "operation failed", and this message is what
+      // the preview surfaces to the user.
+      throw new DriveError(
+        res.status,
+        res.status === 403 ? 'DRIVE_NOT_EXPORTABLE' : mapped.code,
+        res.status === 403
+          ? `Google Drive cannot export this file as ${exportMimeType}`
+          : `${mapped.message} (exporting as ${exportMimeType})`,
+        mapped.retriable
+      );
     }
 
     return res;
   });
+}
+
+/**
+ * Export a Google Workspace file, retrying retriable failures and falling back through
+ * `fallbackMimeTypes` when Google refuses the preferred format outright.
+ *
+ * A 403 on /export means "not exportable as this format" rather than "no access", so it
+ * is worth trying the next candidate; 429 and 5xx mean "ask again shortly", so the same
+ * candidate is retried with backoff. The error thrown is the last one seen, so the
+ * caller reports the reason the *final* attempt failed rather than a generic message.
+ */
+export async function exportFile(
+  env: Env,
+  userId: string,
+  fileId: string,
+  exportMimeType: string,
+  fallbackMimeTypes: string[] = []
+): Promise<Response> {
+  const candidates = [
+    exportMimeType,
+    ...fallbackMimeTypes.filter((mime) => mime !== exportMimeType),
+  ];
+  let lastError: unknown;
+
+  for (const mimeType of candidates) {
+    for (let attempt = 0; attempt <= EXPORT_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        return await exportFileOnce(env, userId, fileId, mimeType);
+      } catch (err) {
+        lastError = err;
+        const retriable = (err as DriveError)?.retriable === true;
+        if (!retriable || attempt === EXPORT_RETRY_DELAYS_MS.length) break;
+        await sleep(EXPORT_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+
+  throw (
+    lastError ??
+    new DriveError(500, 'DRIVE_EXPORT_FAILED', 'Google Drive export produced no response', true)
+  );
 }
 
 export async function startResumableUpload(

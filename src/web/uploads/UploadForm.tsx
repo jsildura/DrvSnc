@@ -9,14 +9,17 @@ import { uploadFileMultipart } from './multipartUpload';
 import { validateRemoteUrl } from '../../worker/services/remoteUrlPolicy';
 import { FolderPicker } from '../components/FolderPicker';
 import { BatchImporter } from './BatchImporter';
+import { SeedrMagnetForm } from './SeedrMagnetForm';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GiB
 
 export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
-  const [activeMode, setActiveMode] = useState<'local' | 'remote' | 'batch'>('local');
+  const [activeMode, setActiveMode] = useState<'local' | 'remote' | 'batch' | 'magnet'>('local');
 
   // Local upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [localFolderId, setLocalFolderId] = useState<string | undefined>(undefined);
+  const [localFolderName, setLocalFolderName] = useState('My Drive (Root)');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -57,6 +60,7 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
         filename: selectedFile.name,
         fileSize: selectedFile.size,
         mimeType: selectedFile.type || 'application/octet-stream',
+        folderId: localFolderId || undefined,
       });
 
       const parts = await uploadFileMultipart(selectedFile, {
@@ -155,6 +159,20 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
           </svg>
           <span>Batch URLs (Bulk)</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveMode('magnet')}
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${activeMode === 'magnet'
+            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+        >
+          <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span>Magnet / Torrent</span>
+        </button>
       </div>
 
       {/* Local Upload Form */}
@@ -180,26 +198,46 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
             </div>
-            {selectedFile ? (
-              <div>
-                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  {selectedFile.name}
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {(selectedFile.size / (1024 * 1024)).toFixed(2)} MiB
-                </p>
-              </div>
-            ) : (
-              <div>
-                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  Click to select or drag & drop file
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Supports up to 5 GiB per upload
-                </p>
-              </div>
-            )}
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Click or drag file to stage for upload
+            </p>
+            <p className="text-xs text-slate-400 mt-1">Supports files up to 5 GiB</p>
           </div>
+
+          {selectedFile && (
+            <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{selectedFile.name}</p>
+                  <p className="text-[10px] text-slate-400 font-mono">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MiB</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedFile(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Destination Folder Selector */}
+          <FolderPicker
+            selectedFolderId={localFolderId}
+            selectedFolderName={localFolderName}
+            onSelect={(folderId, folderName) => {
+              setLocalFolderId(folderId || undefined);
+              setLocalFolderName(folderName || 'My Drive (Root)');
+            }}
+          />
 
           {localError && (
             <p className="text-xs text-rose-500 font-medium">{localError}</p>
@@ -208,12 +246,12 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
           {isUploading && (
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-                <span>Staging to R2...</span>
+                <span>Staging upload...</span>
                 <span>{uploadProgress}%</span>
               </div>
-              <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
                 <div
-                  className="bg-blue-600 h-2 transition-all duration-300"
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -225,7 +263,7 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
             disabled={!selectedFile || isUploading}
             className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium shadow-md shadow-blue-500/20 transition-colors"
           >
-            {isUploading ? 'Uploading...' : 'Upload to Google Drive'}
+            {isUploading ? 'Staging...' : 'Stage File for Upload'}
           </button>
         </form>
       )}
@@ -233,30 +271,30 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
       {/* Remote URL Form */}
       {activeMode === 'remote' && (
         <form onSubmit={handleRemoteSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Download URL
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Direct File URL
             </label>
             <input
               type="url"
-              placeholder="https://example.com/archive.zip"
               value={remoteUrl}
               onChange={(e) => setRemoteUrl(e.target.value)}
+              placeholder="https://example.com/archive.zip"
               required
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-800/50 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full text-xs p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-slate-800/50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Custom Filename (optional)
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Custom Filename (Optional)
             </label>
             <input
               type="text"
-              placeholder="my-archive.zip"
               value={customFilename}
               onChange={(e) => setCustomFilename(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-800/50 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="my-downloaded-file.zip"
+              className="w-full text-xs p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-slate-800/50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
@@ -287,6 +325,11 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
       {/* Batch Importer Form */}
       {activeMode === 'batch' && (
         <BatchImporter onBatchCreated={() => onJobCreated()} />
+      )}
+
+      {/* Seedr Magnet / Torrent Form */}
+      {activeMode === 'magnet' && (
+        <SeedrMagnetForm onJobCreated={() => onJobCreated()} />
       )}
     </div>
   );

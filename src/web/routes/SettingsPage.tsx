@@ -1,6 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../state/AppProvider';
 import { LegalModal, LegalDocType } from '../components/LegalModal';
+import {
+  getSeedrStatus,
+  getSeedrDeviceCode,
+  authorizeSeedrDevice,
+  disconnectSeedr,
+  SeedrStatusResponse,
+  SeedrDeviceCodeData,
+} from '../api/seedr';
+
+function formatBytes(bytes?: number): string {
+  if (!bytes || isNaN(bytes)) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+}
 
 export function SettingsPage() {
   const {
@@ -23,6 +39,69 @@ export function SettingsPage() {
     preferences?.rememberAccount ?? true
   );
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
+  // Seedr integration state
+  const [seedrStatus, setSeedrStatus] = useState<SeedrStatusResponse>({ connected: false });
+  const [seedrLoading, setSeedrLoading] = useState(true);
+  const [deviceCodeData, setDeviceCodeData] = useState<SeedrDeviceCodeData | null>(null);
+  const [copiedSeedrCode, setCopiedSeedrCode] = useState(false);
+  const [seedrActionMsg, setSeedrActionMsg] = useState<string | null>(null);
+  const seedrPollRef = useRef<any>(null);
+
+  const fetchSeedr = async () => {
+    try {
+      const res = await getSeedrStatus();
+      setSeedrStatus(res);
+    } catch {
+      setSeedrStatus({ connected: false });
+    } finally {
+      setSeedrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSeedr();
+    return () => {
+      if (seedrPollRef.current) clearInterval(seedrPollRef.current);
+    };
+  }, []);
+
+  const handleStartSeedrPairing = async () => {
+    setSeedrActionMsg(null);
+    try {
+      const data = await getSeedrDeviceCode();
+      setDeviceCodeData(data);
+
+      if (seedrPollRef.current) clearInterval(seedrPollRef.current);
+      seedrPollRef.current = setInterval(async () => {
+        try {
+          const res = await authorizeSeedrDevice(data.device_code);
+          if (res.success) {
+            if (seedrPollRef.current) clearInterval(seedrPollRef.current);
+            setDeviceCodeData(null);
+            setSeedrActionMsg('Seedr connected successfully!');
+            fetchSeedr();
+          }
+        } catch {
+          // Continue polling
+        }
+      }, 4000);
+    } catch (err) {
+      setSeedrActionMsg((err as Error).message || 'Failed to start Seedr pairing');
+    }
+  };
+
+  const handleDisconnectSeedr = async () => {
+    try {
+      setSeedrActionMsg('Disconnecting...');
+      await disconnectSeedr();
+      setSeedrStatus({ connected: false });
+      setSeedrActionMsg('Seedr account disconnected');
+      setTimeout(() => setSeedrActionMsg(null), 3000);
+    } catch (err) {
+      setSeedrActionMsg((err as Error).message || 'Failed to disconnect');
+    }
+  };
 
   useEffect(() => {
     if (preferences) {
@@ -99,15 +178,99 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={logout}
+            className="py-2 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors shrink-0"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+
+      {/* Seedr.cc Cloud Torrent Integration Card */}
+      <div className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+              Seedr.cc Torrent Downloader
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Powers remote Magnet link & torrent file downloads directly to Google Drive.
+            </p>
+          </div>
+
+          {seedrStatus.connected && (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 w-fit">
+              Connected ({formatBytes(seedrStatus.spaceUsed)} / {formatBytes(seedrStatus.spaceMax)})
+            </span>
+          )}
+        </div>
+
+        {seedrStatus.connected ? (
+          <div className="flex items-center justify-between pt-2">
+            <div className="text-xs text-slate-600 dark:text-slate-400">
+              <span className="font-semibold text-slate-800 dark:text-slate-200">Account:</span> {seedrStatus.username || 'Seedr User'} (Free 2GB Cloud Tier)
+            </div>
             <button
-              onClick={() => logout()}
-              className="py-1.5 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors"
+              type="button"
+              onClick={handleDisconnectSeedr}
+              className="py-1.5 px-3 rounded-xl border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors"
             >
-              Sign Out
+              Disconnect Seedr
             </button>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3 pt-1">
+            {!deviceCodeData ? (
+              <button
+                type="button"
+                onClick={handleStartSeedrPairing}
+                className="py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
+              >
+                <span>Connect Free Seedr Account (1-Click)</span>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+            ) : (
+              <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <span>Enter Code on Seedr.cc</span>
+                  <span className="text-amber-600 dark:text-amber-400 font-normal">Waiting for approval...</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 p-2 rounded-xl bg-white dark:bg-slate-900 font-mono text-center font-bold text-indigo-600 dark:text-indigo-400 tracking-wider">
+                    {deviceCodeData.user_code}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(deviceCodeData.user_code);
+                      setCopiedSeedrCode(true);
+                      setTimeout(() => setCopiedSeedrCode(false), 2000);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold"
+                  >
+                    {copiedSeedrCode ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <a
+                  href={deviceCodeData.verification_url || 'https://www.seedr.cc/devices'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block text-center py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+                >
+                  Open seedr.cc/devices
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
+        {seedrActionMsg && (
+          <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">{seedrActionMsg}</p>
+        )}
       </div>
 
       {/* Appearance Card */}

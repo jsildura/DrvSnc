@@ -28,6 +28,9 @@ import {
   removePermission,
   downloadFile,
   exportFile,
+  getExportMimeType,
+  getExportMimeTypes,
+  getFileMetadata,
 } from '../services/driveClient';
 
 interface ErrorLike {
@@ -35,6 +38,34 @@ interface ErrorLike {
   message?: string;
   retriable?: boolean;
   status?: number;
+}
+
+/**
+ * Work out what format a file should be exported as, or null if it isn't a Google
+ * Workspace file and therefore has real bytes to download instead.
+ *
+ * Any failure here resolves to null rather than throwing: this is only ever consulted
+ * after a download has already failed, and the download's own error is the more useful
+ * one to report.
+ */
+async function resolveExportMimeType(
+  env: Env,
+  userId: string,
+  fileId: string
+): Promise<{ preferred: string; fallbacks: string[] } | null> {
+  let mimeType: string | undefined;
+  try {
+    mimeType = (await getFileMetadata(env, userId, fileId)).mimeType;
+  } catch {
+    return null;
+  }
+  if (!mimeType) return null;
+
+  const preferred = getExportMimeType(mimeType);
+  if (!preferred) return null;
+
+  const fallbacks = (getExportMimeTypes(mimeType) || []).filter((mime) => mime !== preferred);
+  return { preferred, fallbacks };
 }
 
 const driveRoutes = new Hono<{
@@ -434,6 +465,15 @@ driveRoutes.post('/trash/empty', requireCsrf, async (c) => {
 });
 
 // GET /files/:fileId/download
+//
+// Serves two different Google endpoints behind one URL. Ordinary files stream from
+// alt=media; Google Workspace files have no binary content at all and must go through
+// /export with a target format.
+//
+// `?exportMimeType=` short-circuits the decision, which is the path the in-app viewer
+// uses (it asks for application/pdf). Without it we try alt=media first and only consult
+// the file's metadata if that fails in a way that suggests the file isn't downloadable —
+// so the common case still costs a single upstream call.
 driveRoutes.get('/files/:fileId/download', async (c) => {
   const user = c.get('user')!;
   const fileId = c.req.param('fileId');
@@ -441,15 +481,31 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
 
   try {
     let upstreamRes: Response;
+
     if (requestedExportMime) {
       upstreamRes = await exportFile(c.env, user.id, fileId, requestedExportMime);
     } else {
       try {
         upstreamRes = await downloadFile(c.env, user.id, fileId);
       } catch (dlErr) {
-        // If file is a Google Doc/Sheet/Slide, Google returns 400/403 for direct alt=media download
-        // Fall back to PDF export automatically
-        upstreamRes = await exportFile(c.env, user.id, fileId, 'application/pdf');
+        // Google answers alt=media on a Workspace file with 403 fileNotDownloadable
+        // (and occasionally 400). Anything else — 404, 401, 429, 5xx — is a real
+        // failure of this download and must be reported as itself: retrying it as an
+        // export would replace the true cause with Google's "not exportable" 403 and
+        // send the user chasing a permissions problem they don't have.
+        const status = (dlErr as ErrorLike).status;
+        if (status !== 403 && status !== 400) throw dlErr;
+
+        const exportMime = await resolveExportMimeType(c.env, user.id, fileId);
+        if (!exportMime) throw dlErr;
+
+        upstreamRes = await exportFile(
+          c.env,
+          user.id,
+          fileId,
+          exportMime.preferred,
+          exportMime.fallbacks
+        );
       }
     }
 

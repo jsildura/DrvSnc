@@ -8,6 +8,7 @@ import { accountRoutes } from './routes/account';
 import { preferencesRoutes } from './routes/preferences';
 import { driveRoutes } from './routes/drive';
 import { jobRoutes } from './routes/jobs';
+import { seedrRoutes } from './routes/seedr';
 import { handleScheduledCleanup } from './scheduled/cleanup';
 import { AccountView } from '../shared/contracts';
 
@@ -66,6 +67,7 @@ app.route('/api/v1/account', accountRoutes);
 app.route('/api/v1/preferences', preferencesRoutes);
 app.route('/api/v1/drive', driveRoutes);
 app.route('/api/v1/jobs', jobRoutes);
+app.route('/api/v1/seedr', seedrRoutes);
 
 // Active session profile route
 app.get('/api/v1/session', requireSession, (c) => {

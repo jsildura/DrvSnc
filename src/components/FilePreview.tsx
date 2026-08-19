@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
   IconButton,
@@ -43,6 +43,7 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import SlideshowIcon from '@mui/icons-material/Slideshow';
+import FitScreenIcon from '@mui/icons-material/FitScreen';
 
 import { renderAsync as renderDocx } from 'docx-preview';
 import * as XLSX from 'xlsx';
@@ -104,6 +105,31 @@ function getFileExtension(filename?: string): string {
   return parts.length > 1 ? parts.pop()!.toLowerCase() : '';
 }
 
+// Kinds that render a paginated document the user may want to zoom. The PDF family
+// is separated out because it zooms through the native viewer's URL fragment, while
+// the client-rendered kinds zoom with a CSS transform on their wrapper.
+const PDF_VIEWER_KINDS: PreviewKind[] = ['pdf', 'gdoc', 'gsheet', 'gslide'];
+const DOCUMENT_KINDS: PreviewKind[] = [...PDF_VIEWER_KINDS, 'docx', 'xlsx'];
+
+const isPdfViewerKind = (kind: PreviewKind) => PDF_VIEWER_KINDS.includes(kind);
+const isDocumentKind = (kind: PreviewKind) => DOCUMENT_KINDS.includes(kind);
+
+// How long to wait for Drive's presentation iframe before offering slide thumbnails.
+const PPTX_FRAME_TIMEOUT_MS = 8000;
+
+// Id of the offscreen iframe used for printing, so repeated prints reuse one element.
+const PRINT_FRAME_ID = 'gdu-preview-print-frame';
+
+// Spreadsheet column headers: A..Z, then AA, AB, … The previous `65 + (colIdx % 26)`
+// silently relabelled column 27 as "A" again, so wide sheets had duplicate headers.
+function columnLabel(index: number): string {
+  let label = '';
+  for (let n = index; n >= 0; n = Math.floor(n / 26) - 1) {
+    label = String.fromCharCode(65 + (n % 26)) + label;
+  }
+  return label;
+}
+
 function detectPreviewKind(filename?: string, mimeType?: string): PreviewKind {
   const ext = getFileExtension(filename);
   const mime = (mimeType || '').toLowerCase();
@@ -113,17 +139,23 @@ function detectPreviewKind(filename?: string, mimeType?: string): PreviewKind {
   if (mime.includes('vnd.google-apps.spreadsheet')) return 'gsheet';
   if (mime.includes('vnd.google-apps.presentation')) return 'gslide';
 
-  // Microsoft Office Word
+  // Microsoft Office Word. Only OOXML .docx goes to the native renderer: legacy .doc
+  // is an OLE2 compound file that docx-preview cannot parse at all, so routing it
+  // here only ever produced an error card. The office fallback offers the things that
+  // do work for it — download, and "Open in Google Docs" (Drive converts on open).
   if (ext === 'docx' || mime.includes('wordprocessingml.document')) return 'docx';
-  if (ext === 'doc' || mime.includes('msword')) return 'docx';
+  if (ext === 'doc' || mime.includes('msword')) return 'office';
 
-  // Microsoft Office Excel
+  // Microsoft Office Excel. SheetJS reads .ods too, so it belongs here rather than
+  // in the generic office bucket.
   if (ext === 'xlsx' || ext === 'xls' || ext === 'ods' || mime.includes('spreadsheetml.sheet') || mime.includes('ms-excel')) {
     return 'xlsx';
   }
 
-  // Microsoft Office PowerPoint
-  if (ext === 'pptx' || ext === 'ppt' || ext === 'odp' || mime.includes('presentationml.presentation') || mime.includes('ms-powerpoint')) {
+  // Microsoft Office PowerPoint. .odp is deliberately excluded — Drive's preview
+  // endpoint does not render OpenDocument presentations, so it would be a guaranteed
+  // blank frame.
+  if (ext === 'pptx' || ext === 'ppt' || mime.includes('presentationml.presentation') || mime.includes('ms-powerpoint')) {
     return 'pptx';
   }
 
@@ -167,8 +199,9 @@ function detectPreviewKind(filename?: string, mimeType?: string): PreviewKind {
     return 'code';
   }
 
-  // Other office types
-  if (['odt', 'ods', 'odp', 'rtf'].includes(ext)) {
+  // Other office types. .ods is handled by the spreadsheet viewer above; .doc and
+  // .odp land here because nothing in the app can actually render them.
+  if (['odt', 'odp', 'rtf'].includes(ext)) {
     return 'office';
   }
 
@@ -184,20 +217,47 @@ function formatBytes(bytes?: number | null): string {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
+/**
+ * Which Google editor can open this file, and at what URL.
+ *
+ * The MIME tests are ordered most-specific-first and deliberately avoid matching a
+ * bare `document`: every OOXML type contains "officedocument" and every OpenDocument
+ * type contains "opendocument", so a looser test sent .pptx and .xlsx files to the
+ * Google *Docs* editor — a /document/d/{id}/edit URL that only ever errors out for a
+ * spreadsheet or a deck.
+ */
 function getGoogleAppInfo(fileId: string, previewKind: PreviewKind, mimeType?: string, filename?: string) {
   const ext = getFileExtension(filename);
+  const mime = (mimeType || '').toLowerCase();
 
-  if (previewKind === 'gdoc' || previewKind === 'docx' || ext === 'doc' || ext === 'docx' || mimeType?.includes('document') || mimeType?.includes('word')) {
+  const isPresentation =
+    previewKind === 'gslide' ||
+    previewKind === 'pptx' ||
+    ['ppt', 'pptx', 'odp'].includes(ext) ||
+    mime.includes('presentationml') ||
+    mime.includes('powerpoint') ||
+    mime.includes('opendocument.presentation') ||
+    mime.includes('google-apps.presentation');
+
+  if (isPresentation) {
     return {
-      name: 'Google Docs',
-      url: `https://docs.google.com/document/d/${fileId}/edit`,
-      color: 'bg-blue-600 hover:bg-blue-500 text-white',
-      badge: 'Doc',
-      icon: 'doc',
+      name: 'Google Slides',
+      url: `https://docs.google.com/presentation/d/${fileId}/edit`,
+      color: 'bg-amber-600 hover:bg-amber-500 text-white',
+      badge: 'Slides',
+      icon: 'slide',
     };
   }
 
-  if (previewKind === 'gsheet' || previewKind === 'xlsx' || ext === 'xls' || ext === 'xlsx' || ext === 'csv' || mimeType?.includes('spreadsheet') || mimeType?.includes('excel')) {
+  const isSpreadsheet =
+    previewKind === 'gsheet' ||
+    previewKind === 'xlsx' ||
+    ['xls', 'xlsx', 'ods', 'csv'].includes(ext) ||
+    mime.includes('spreadsheet') ||
+    mime.includes('excel') ||
+    mime.includes('csv');
+
+  if (isSpreadsheet) {
     return {
       name: 'Google Sheets',
       url: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
@@ -207,13 +267,23 @@ function getGoogleAppInfo(fileId: string, previewKind: PreviewKind, mimeType?: s
     };
   }
 
-  if (previewKind === 'gslide' || previewKind === 'pptx' || ext === 'ppt' || ext === 'pptx' || mimeType?.includes('presentation') || mimeType?.includes('powerpoint')) {
+  const isDocument =
+    previewKind === 'gdoc' ||
+    previewKind === 'docx' ||
+    ['doc', 'docx', 'odt', 'rtf'].includes(ext) ||
+    mime.includes('wordprocessingml') ||
+    mime.includes('msword') ||
+    mime.includes('opendocument.text') ||
+    mime.includes('google-apps.document') ||
+    mime.includes('rtf');
+
+  if (isDocument) {
     return {
-      name: 'Google Slides',
-      url: `https://docs.google.com/presentation/d/${fileId}/edit`,
-      color: 'bg-amber-600 hover:bg-amber-500 text-white',
-      badge: 'Slides',
-      icon: 'slide',
+      name: 'Google Docs',
+      url: `https://docs.google.com/document/d/${fileId}/edit`,
+      color: 'bg-blue-600 hover:bg-blue-500 text-white',
+      badge: 'Doc',
+      icon: 'doc',
     };
   }
 
@@ -311,6 +381,20 @@ export default function FilePreview({
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
+  // Document viewer zoom. Deliberately separate from the image `zoom` above: the two
+  // are applied by different mechanisms (a viewer fragment or a wrapper transform vs.
+  // an <img> transform), so one shared value would have made the toolbar report a
+  // scale it wasn't applying.
+  const [docZoom, setDocZoom] = useState(1);
+  const [docFitWidth, setDocFitWidth] = useState(false);
+  const docScrollRef = useRef<HTMLDivElement | null>(null);
+  const docContentRef = useRef<HTMLDivElement | null>(null);
+
+  // PowerPoint state. `pptxFallback` swaps Drive's embedded viewer for the slide
+  // thumbnail Drive already generated.
+  const [pptxFallback, setPptxFallback] = useState(false);
+  const pptxFrameLoadedRef = useRef(false);
+
   // Code / Text / Markdown / CSV state
   const [textContent, setTextContent] = useState<string | null>(null);
   const [textError, setTextError] = useState<string | null>(null);
@@ -357,6 +441,10 @@ export default function FilePreview({
     setZoom(1);
     setRotation(0);
     setPanOffset({ x: 0, y: 0 });
+    setDocZoom(1);
+    setDocFitWidth(false);
+    setPptxFallback(false);
+    pptxFrameLoadedRef.current = false;
     setTextContent(null);
     setTextError(null);
     setPdfError(null);
@@ -512,7 +600,25 @@ export default function FilePreview({
       };
     }
 
-    // 6. PowerPoint or Other
+    // 6. PowerPoint — rendered by Drive in a cross-origin iframe we cannot inspect.
+    // Its `onLoad` is the only success signal available, and it does fire for Google's
+    // sign-in interstitial too, so this timeout catches the case where nothing loads
+    // at all; the visible "Show slide thumbnails" control covers the rest.
+    if (previewKind === 'pptx') {
+      const fallbackTimer = setTimeout(() => {
+        if (isSubscribed && !pptxFrameLoadedRef.current) {
+          setPptxFallback(true);
+          setLoading(false);
+        }
+      }, PPTX_FRAME_TIMEOUT_MS);
+      return () => {
+        isSubscribed = false;
+        clearTimeout(fallbackTimer);
+      };
+    }
+
+    // 7. Anything without its own loader (office, unsupported, video, audio) — those
+    // render immediately, so just clear the overlay.
     const timer = setTimeout(() => setLoading(false), 800);
     return () => {
       isSubscribed = false;
@@ -528,6 +634,82 @@ export default function FilePreview({
     const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
     setSheetGrid(rawData);
   };
+
+  // ---------------------------------------------------------------------------
+  // Document zoom
+  // ---------------------------------------------------------------------------
+  const isDocumentViewer = isDocumentKind(previewKind);
+
+  const zoomDocIn = useCallback(() => {
+    setDocFitWidth(false);
+    setDocZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100));
+  }, []);
+
+  const zoomDocOut = useCallback(() => {
+    setDocFitWidth(false);
+    setDocZoom((z) => Math.max(0.25, Math.round((z - 0.25) * 100) / 100));
+  }, []);
+
+  const resetDocZoom = useCallback(() => {
+    setDocFitWidth(false);
+    setDocZoom(1);
+  }, []);
+
+  const fitDocWidth = useCallback(() => {
+    setDocFitWidth(true);
+
+    // The PDF family fits through the native viewer's own #view=FitH, so there is
+    // nothing to measure. The client-rendered kinds need an explicit scale factor.
+    if (isPdfViewerKind(previewKind)) return;
+
+    const container = docScrollRef.current;
+    const content = docContentRef.current;
+    if (!container || !content) return;
+
+    // Both measurements are pre-transform layout values, so the ratio is correct
+    // regardless of the current zoom. They are 0 before layout (and always in
+    // jsdom) — scaling by 0 would blank the document, so leave the zoom alone.
+    const available = container.clientWidth;
+    const natural = content.scrollWidth;
+    if (!available || !natural) return;
+
+    setDocZoom(Math.min(4, Math.max(0.25, Math.round((available / natural) * 100) / 100)));
+  }, [previewKind]);
+
+  // Native PDF viewers expose no DOM API for zooming — the URL fragment is the only
+  // control surface, so the toolbar drives the viewer by re-pointing at the same blob.
+  const pdfViewerUrl = useMemo(() => {
+    if (!pdfBlobUrl) return null;
+    return `${pdfBlobUrl}${docFitWidth ? '#view=FitH' : `#zoom=${Math.round(docZoom * 100)}`}`;
+  }, [pdfBlobUrl, docFitWidth, docZoom]);
+
+  // ---------------------------------------------------------------------------
+  // Spreadsheet grid derivation
+  // ---------------------------------------------------------------------------
+
+  // sheet_to_json returns ragged rows, so the column count has to come from the
+  // widest row; deriving it from row 0 truncated every sheet whose first row was
+  // shorter than its data.
+  const sheetColumnCount = useMemo(
+    () => sheetGrid.reduce((max, row) => Math.max(max, row?.length || 0), 0),
+    [sheetGrid]
+  );
+
+  // Row 1 is pinned so the sheet's own labels survive a search — filtering it away
+  // with everything else left the grid with nothing but bare column letters. Each
+  // row keeps its true spreadsheet number rather than its position in the filtered
+  // list, so a match can be located in the real file.
+  const visibleSheetRows = useMemo(() => {
+    const needle = xlsxSearch.trim().toLowerCase();
+    return sheetGrid
+      .map((row, index) => ({ row: row || [], rowNumber: index + 1 }))
+      .filter(
+        ({ row, rowNumber }) =>
+          !needle ||
+          rowNumber === 1 ||
+          row.some((cell) => String(cell ?? '').toLowerCase().includes(needle))
+      );
+  }, [sheetGrid, xlsxSearch]);
 
   // Navigation handlers
   const handlePrev = useCallback(() => {
@@ -561,15 +743,21 @@ export default function FilePreview({
         handleNext();
       } else if (e.key === '+' || e.key === '=') {
         e.preventDefault();
-        setZoom((prev) => Math.min(5, prev + 0.25));
+        if (isDocumentViewer) zoomDocIn();
+        else setZoom((prev) => Math.min(5, prev + 0.25));
       } else if (e.key === '-' || e.key === '_') {
         e.preventDefault();
-        setZoom((prev) => Math.max(0.25, prev - 0.25));
+        if (isDocumentViewer) zoomDocOut();
+        else setZoom((prev) => Math.max(0.25, prev - 0.25));
       } else if (e.key === '0') {
         e.preventDefault();
-        setZoom(1);
-        setRotation(0);
-        setPanOffset({ x: 0, y: 0 });
+        if (isDocumentViewer) {
+          resetDocZoom();
+        } else {
+          setZoom(1);
+          setRotation(0);
+          setPanOffset({ x: 0, y: 0 });
+        }
       } else if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
         setShowInfo((prev) => !prev);
@@ -578,7 +766,7 @@ export default function FilePreview({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose, handlePrev, handleNext]);
+  }, [open, onClose, handlePrev, handleNext, isDocumentViewer, zoomDocIn, zoomDocOut, resetDocZoom]);
 
   // Pan handlers for image zoom
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -695,19 +883,47 @@ export default function FilePreview({
     setIsAudioMuted(!isAudioMuted);
   };
 
-  // Print helper
-  const handlePrint = () => {
-    const targetUrl = pdfBlobUrl || fileUrl;
-    if (targetUrl) {
-      const printWindow = window.open(targetUrl, '_blank');
-      if (printWindow) {
-        printWindow.focus();
-        printWindow.print();
-      }
-    } else {
+  // Print helper.
+  //
+  // `window.open(url) + print()` printed a blank page and often nothing at all: the
+  // popup has not parsed the PDF by the time print() runs synchronously, and popup
+  // blockers reject the window outright. An offscreen iframe fixes both — we own its
+  // load event, so print() fires only once the document is really there, and no popup
+  // is involved.
+  const handlePrint = useCallback(() => {
+    if (!pdfBlobUrl) {
       window.print();
+      return;
     }
-  };
+
+    document.getElementById(PRINT_FRAME_ID)?.remove();
+
+    const frame = document.createElement('iframe');
+    frame.id = PRINT_FRAME_ID;
+    frame.setAttribute('aria-hidden', 'true');
+    // Offscreen rather than display:none — a display:none frame has no layout and
+    // several browsers refuse to print it.
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0;';
+    frame.onload = () => {
+      try {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+      } catch {
+        // A browser that refuses to print the frame still leaves the PDF viewer's
+        // own print control available, so there is nothing useful to report here.
+      }
+    };
+    frame.src = pdfBlobUrl;
+    document.body.appendChild(frame);
+  }, [pdfBlobUrl]);
+
+  // The print frame outlives handlePrint on purpose (removing it cancels the dialog),
+  // so it has to be cleaned up when the preview goes away.
+  useEffect(() => {
+    return () => {
+      document.getElementById(PRINT_FRAME_ID)?.remove();
+    };
+  }, []);
 
   // Copy link helper
   const handleCopyLink = () => {
@@ -840,6 +1056,42 @@ export default function FilePreview({
             </div>
           )}
 
+          {/* Zoom controls for documents (PDF, Workspace exports, Word, spreadsheets) */}
+          {isDocumentViewer && (
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-0.5 border border-slate-200 dark:border-slate-700">
+              <Tooltip title="Zoom out (-)">
+                <IconButton size="small" onClick={zoomDocOut}>
+                  <ZoomOutIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <span className="text-xs font-mono font-medium px-2 text-slate-700 dark:text-slate-300 min-w-[3.5rem] text-center">
+                {docFitWidth ? 'Fit' : `${Math.round(docZoom * 100)}%`}
+              </span>
+              <Tooltip title="Zoom in (+)">
+                <IconButton size="small" onClick={zoomDocIn}>
+                  <ZoomInIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Fit width">
+                <IconButton
+                  size="small"
+                  onClick={fitDocWidth}
+                  sx={{
+                    color: docFitWidth ? '#6366f1' : isDarkMode ? '#cbd5e1' : '#475569',
+                    bgcolor: docFitWidth ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
+                  }}
+                >
+                  <FitScreenIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Reset (0)">
+                <IconButton size="small" onClick={resetDocZoom}>
+                  <RestartAltIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </div>
+          )}
+
           {/* Text/Code Wrap & Copy Toggle */}
           {(previewKind === 'code' || previewKind === 'markdown') && (
             <>
@@ -914,7 +1166,11 @@ export default function FilePreview({
           )}
 
           {/* Print button */}
-          {(previewKind === 'pdf' || previewKind === 'image' || previewKind === 'code' || previewKind === 'gdoc') && (
+          {(isDocumentViewer ||
+            previewKind === 'image' ||
+            previewKind === 'code' ||
+            previewKind === 'markdown' ||
+            previewKind === 'csv') && (
             <Tooltip title="Print Document">
               <IconButton size="small" onClick={handlePrint} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
                 <PrintIcon fontSize="small" />
@@ -1063,15 +1319,15 @@ export default function FilePreview({
                     </a>
                   )}
                 </div>
-              ) : pdfBlobUrl ? (
+              ) : pdfViewerUrl ? (
                 <object
-                  data={pdfBlobUrl}
+                  data={pdfViewerUrl}
                   type="application/pdf"
                   className="w-full h-full border-none rounded-2xl"
                   title={fileName}
                 >
                   <iframe
-                    src={pdfBlobUrl}
+                    src={pdfViewerUrl}
                     title={fileName}
                     className="w-full h-full border-none rounded-2xl"
                   />
@@ -1082,7 +1338,10 @@ export default function FilePreview({
 
           {/* ======================= WORD (.DOCX) NATIVE VIEWER ======================= */}
           {previewKind === 'docx' && (
-            <div className="w-full h-full max-w-5xl bg-slate-200 dark:bg-slate-950 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-y-auto p-4 sm:p-8 flex justify-center">
+            <div
+              ref={docScrollRef}
+              className="w-full h-full max-w-5xl bg-slate-200 dark:bg-slate-950 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-auto p-4 sm:p-8 flex justify-center"
+            >
               {docxError ? (
                 <div className="my-auto text-center p-8">
                   <DescriptionIcon sx={{ fontSize: 56, color: '#3b82f6', mb: 2 }} />
@@ -1104,10 +1363,20 @@ export default function FilePreview({
                 </div>
               ) : (
                 <div
-                  ref={docxContainerRef}
-                  className="w-full max-w-3xl bg-white text-slate-900 shadow-xl rounded-sm p-8 sm:p-12 min-h-full font-serif leading-relaxed"
-                  style={{ minHeight: '1000px' }}
-                />
+                  ref={docContentRef}
+                  className="w-full max-w-3xl"
+                  style={{
+                    transform: `scale(${docZoom})`,
+                    transformOrigin: 'top center',
+                    transition: 'transform 0.15s ease-out',
+                  }}
+                >
+                  <div
+                    ref={docxContainerRef}
+                    className="w-full bg-white text-slate-900 shadow-xl rounded-sm p-8 sm:p-12 font-serif leading-relaxed"
+                    style={{ minHeight: '1000px' }}
+                  />
+                </div>
               )}
             </div>
           )}
@@ -1157,49 +1426,54 @@ export default function FilePreview({
                   )}
 
                   {/* Spreadsheet Grid View */}
-                  <div className="flex-1 overflow-auto">
-                    <table className="w-full text-left text-xs border-collapse font-mono">
-                      <thead className="bg-slate-100 dark:bg-slate-950 sticky top-0 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold z-10">
-                        <tr>
-                          <th className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 w-12 text-center text-slate-400 dark:text-slate-500">
-                            #
-                          </th>
-                          {sheetGrid[0] &&
-                            sheetGrid[0].map((_, colIdx) => (
+                  <div ref={docScrollRef} className="flex-1 overflow-auto">
+                    <div
+                      ref={docContentRef}
+                      style={{
+                        transform: `scale(${docZoom})`,
+                        transformOrigin: 'top left',
+                        transition: 'transform 0.15s ease-out',
+                      }}
+                    >
+                      <table className="w-full text-left text-xs border-collapse font-mono">
+                        <thead className="bg-slate-100 dark:bg-slate-950 sticky top-0 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold z-10">
+                          <tr>
+                            <th className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 w-12 text-center text-slate-400 dark:text-slate-500">
+                              #
+                            </th>
+                            {Array.from({ length: sheetColumnCount }, (_, colIdx) => (
                               <th
                                 key={colIdx}
                                 className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 whitespace-nowrap text-center"
                               >
-                                {String.fromCharCode(65 + (colIdx % 26))}
+                                {columnLabel(colIdx)}
                               </th>
                             ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                        {sheetGrid
-                          .filter((row) =>
-                            xlsxSearch
-                              ? row.some((cell) => String(cell).toLowerCase().includes(xlsxSearch.toLowerCase()))
-                              : true
-                          )
-                          .map((row, rowIdx) => (
-                            <tr key={rowIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {visibleSheetRows.map(({ row, rowNumber }) => (
+                            <tr key={rowNumber} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                               <td className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-center select-none font-semibold">
-                                {rowIdx + 1}
+                                {rowNumber}
                               </td>
-                              {row.map((cell, colIdx) => (
-                                <td
-                                  key={colIdx}
-                                  className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
-                                  title={String(cell)}
-                                >
-                                  {String(cell)}
-                                </td>
-                              ))}
+                              {Array.from({ length: sheetColumnCount }, (_, colIdx) => {
+                                const text = String(row[colIdx] ?? '');
+                                return (
+                                  <td
+                                    key={colIdx}
+                                    className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
+                                    title={text}
+                                  >
+                                    {text}
+                                  </td>
+                                );
+                              })}
                             </tr>
                           ))}
-                      </tbody>
-                    </table>
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </>
               )}
@@ -1209,13 +1483,82 @@ export default function FilePreview({
           {/* ======================= POWERPOINT (.PPTX) VIEWER ======================= */}
           {previewKind === 'pptx' && (
             <div className="w-full h-full max-w-5xl rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
-              <iframe
-                src={`https://docs.google.com/presentation/d/${fileId}/preview?rm=minimal&embedded=true`}
-                title={fileName}
-                className="w-full h-full border-none"
-                allow="autoplay; encrypted-media"
-                onLoad={() => setLoading(false)}
-              />
+              {pptxFallback ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-5 overflow-auto p-6 text-center">
+                  <SlideshowIcon sx={{ fontSize: 48, color: '#f59e0b' }} />
+                  {thumbnailLink ? (
+                    <>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 max-w-md">
+                        Showing the slide thumbnail Google Drive generated for this presentation. Open
+                        it in Google Slides to page through every slide.
+                      </p>
+                      <img
+                        src={thumbnailLink.replace(/=s\d+/, '=s1600')}
+                        alt={`First slide of ${fileName}`}
+                        referrerPolicy="no-referrer"
+                        className="max-w-full rounded-xl shadow-xl border border-slate-200 dark:border-slate-700"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                        Unable to preview this presentation
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                        Google Drive did not return a preview or a slide thumbnail for this file. Open
+                        it in Google Slides, or download it to view the slides locally.
+                      </p>
+                    </>
+                  )}
+                  <div className="flex items-center gap-3">
+                    {googleAppInfo && (
+                      <a
+                        href={googleAppInfo.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-lg inline-flex items-center gap-2"
+                      >
+                        <span>Open in {googleAppInfo.name}</span>
+                        <OpenInNewIcon fontSize="small" />
+                      </a>
+                    )}
+                    <a
+                      href={fileUrl}
+                      download={fileName}
+                      className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold border border-slate-200 dark:border-slate-700 inline-flex items-center gap-1.5"
+                    >
+                      <DownloadIcon fontSize="small" />
+                      <span>Download</span>
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Binary presentations live at the /file/d/ preview endpoint. The
+                      /presentation/d/ URL only serves native Google Slides, so it
+                      rendered an error page for every uploaded .pptx. */}
+                  <iframe
+                    src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
+                    title={fileName}
+                    className="w-full flex-1 border-none"
+                    allow="autoplay; encrypted-media"
+                    onLoad={() => {
+                      pptxFrameLoadedRef.current = true;
+                      setLoading(false);
+                    }}
+                  />
+                  {/* Drive's viewer can load a sign-in interstitial instead of the
+                      slides, and nothing about that is visible to us from outside the
+                      frame — so the fallback has to be reachable by hand. */}
+                  <button
+                    type="button"
+                    onClick={() => setPptxFallback(true)}
+                    className="shrink-0 px-4 py-2 text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    Slides not showing? Show slide thumbnails
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -1401,9 +1744,22 @@ export default function FilePreview({
                 {formatBytes(fileSize)} • {mimeType || 'Binary file'}
               </p>
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-4 leading-relaxed">
-                No native preview available for this file type. You can download the file to open it locally on your computer.
+                {googleAppInfo
+                  ? `No in-app preview is available for this format, but ${googleAppInfo.name} can open it — Drive converts the file on the way in. You can also download it to open locally.`
+                  : 'No native preview available for this file type. You can download the file to open it locally on your computer.'}
               </p>
-              <div className="flex items-center gap-3 mt-6">
+              <div className="flex flex-wrap items-center justify-center gap-3 mt-6">
+                {googleAppInfo && (
+                  <a
+                    href={googleAppInfo.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`px-5 py-2.5 rounded-xl text-xs font-semibold shadow-lg transition-colors flex items-center gap-2 ${googleAppInfo.color}`}
+                  >
+                    <span>Open in {googleAppInfo.name}</span>
+                    <OpenInNewIcon fontSize="small" />
+                  </a>
+                )}
                 <a
                   href={fileUrl}
                   download={fileName}

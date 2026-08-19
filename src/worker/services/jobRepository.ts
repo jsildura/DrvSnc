@@ -88,21 +88,26 @@ export function computeBatchView(
   const progressBytes = jobs.reduce((sum, j) => sum + (j.progressBytes || 0), 0);
   const totalKnownBytes = jobs.reduce((sum, j) => sum + (j.fileSize || 0), 0);
 
-  let status: BatchStatus = 'queued';
-  if (activeCount > 0) {
+  let status: BatchStatus;
+  if (jobs.length === 0) {
+    // A batch with no surviving children can never change again: its jobs were deleted
+    // from history or reaped by cleanup, so there is nothing left to queue, run or retry.
+    // Leaving it 'queued' (the old default when no branch matched) made a finished batch
+    // render as a pending transfer — original file count, every counter at zero, and a
+    // Cancel Batch button with nothing to cancel.
+    status = 'completed';
+  } else if (activeCount > 0) {
     status = 'running';
   } else if (queuedCount > 0) {
     status = 'queued';
-  } else if (jobs.length > 0) {
-    if (completedCount === jobs.length) {
-      status = 'completed';
-    } else if (canceledCount === jobs.length) {
-      status = 'canceled';
-    } else if (completedCount > 0) {
-      status = 'partial';
-    } else {
-      status = 'failed';
-    }
+  } else if (completedCount === jobs.length) {
+    status = 'completed';
+  } else if (canceledCount === jobs.length) {
+    status = 'canceled';
+  } else if (completedCount > 0) {
+    status = 'partial';
+  } else {
+    status = 'failed';
   }
 
   return {
@@ -473,9 +478,44 @@ export async function deleteJobHistory(
     throw new JobError('ACTIVE_JOB_NOT_DELETABLE', 'Active jobs cannot be deleted from history; cancel first', 400);
   }
 
-  await env.DB.prepare('DELETE FROM upload_jobs WHERE id = ? AND user_id = ?')
-    .bind(jobId, userId)
-    .run();
+  const batchId = row.batch_id ? String(row.batch_id) : null;
+
+  if (!batchId) {
+    await env.DB.prepare('DELETE FROM upload_jobs WHERE id = ? AND user_id = ?')
+      .bind(jobId, userId)
+      .run();
+    return;
+  }
+
+  // A batch is only ever a view over its surviving children, so removing one from history
+  // has to update the parent row in the same transaction. Without this the batch keeps its
+  // original item_count while every derived counter drops to zero, and the card reads
+  // "Batch Transfer (5 files) / 0 completed / 0%" forever — a finished batch that looks
+  // like it is about to start over, and that nothing can clear.
+  //
+  // Statement order carries the logic: the DELETE only matches once the last child is
+  // gone, in which case the UPDATE then matches nothing. While children remain it is the
+  // DELETE that no-ops and the UPDATE that trues up item_count to what is actually left.
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM upload_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId),
+    env.DB.prepare(
+      `DELETE FROM upload_batches
+       WHERE id = ? AND user_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM upload_jobs WHERE upload_jobs.batch_id = upload_batches.id
+         )`
+    ).bind(batchId, userId),
+    env.DB.prepare(
+      `UPDATE upload_batches
+       SET item_count = (
+             SELECT COUNT(*) FROM upload_jobs WHERE upload_jobs.batch_id = upload_batches.id
+           ),
+           updated_at = ?,
+           version = version + 1
+       WHERE id = ? AND user_id = ?`
+    ).bind(now, batchId, userId),
+  ]);
 }
 
 async function getBatchById(
@@ -733,6 +773,13 @@ export async function getBatch(
     .all<Record<string, unknown>>();
 
   const jobs = (childJobsRes.results || []).map(normalizeJobRow);
+  // An emptied batch row is garbage awaiting the cleanup sweep, not something the user can
+  // act on — there is nothing to show, cancel or retry. Treating it as absent keeps this
+  // consistent with listBatches and turns a silent no-op cancel into an honest 404.
+  if (jobs.length === 0) {
+    return null;
+  }
+
   const batch = computeBatchView(batchRow, jobs);
   return { batch, jobs };
 }
@@ -778,6 +825,10 @@ export async function listBatches(
       .all<Record<string, unknown>>();
 
     const jobs = (childJobsRes.results || []).map(normalizeJobRow);
+    // Skip batches whose children have all been deleted from history. The row survives
+    // until the scheduled cleanup reclaims it, but a card for it would be a header over an
+    // empty progress bar, so it is not part of the user's batch list.
+    if (jobs.length === 0) continue;
     batches.push(computeBatchView(bRow, jobs));
   }
 
