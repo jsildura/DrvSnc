@@ -46,6 +46,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
   const [deletingItemId, setDeletingItemId] = useState<string | number | null>(null);
 
   const pollTimerRef = useRef<any>(null);
+  const recentSubmitRef = useRef<number>(0); // timestamp of last submission
 
   const fetchStatus = async () => {
     try {
@@ -62,13 +63,22 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
     fetchStatus();
   }, []);
 
-  // Auto-poll when there are active torrents or items in Seedr cloud
+  // Auto-poll when there are active torrents, during submission, or within 60s after a magnet was submitted
   useEffect(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
-    if (seedrStatus.connected && (seedrStatus.torrents?.length || isSubmitting)) {
+    const hasActiveTorrents = Boolean(seedrStatus.connected && seedrStatus.torrents?.length);
+    const isRecentSubmit = Date.now() - recentSubmitRef.current < 60_000;
+    const shouldPoll = hasActiveTorrents || isSubmitting || isRecentSubmit;
+
+    if (seedrStatus.connected && shouldPoll) {
       pollTimerRef.current = setInterval(() => {
         fetchStatus();
+        // Stop the extended poll once the 60s grace window expires and no torrents remain
+        if (!isSubmitting && Date.now() - recentSubmitRef.current >= 60_000 && !seedrStatus.torrents?.length) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
       }, 3500);
     }
 
@@ -125,7 +135,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
 
     setIsSubmitting(true);
     setTransferMessage({
-      text: 'Adding torrent to Seedr cloud & checking cache...',
+      text: 'Adding torrent to Seedr cloud...',
       variant: 'info',
     });
 
@@ -136,6 +146,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
         filename: customFilename.trim() || undefined,
       });
 
+      recentSubmitRef.current = Date.now(); // start 60s auto-poll grace window
       setTransferMessage({
         text: res.message || 'Torrent added to Seedr cloud!',
         variant: 'success',

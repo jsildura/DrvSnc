@@ -4,8 +4,6 @@ import { requireSession, AuthenticatedSession } from '../middleware/session';
 import { requireCsrf } from '../middleware/csrf';
 import { AccountView } from '../../shared/contracts';
 import {
-  getSeedrDeviceCode,
-  pollSeedrDeviceAuthorization,
   saveSeedrCredentials,
   getSeedrCredentials,
   deleteSeedrCredentials,
@@ -210,7 +208,7 @@ seedrRoutes.delete('/item', requireCsrf, async (c) => {
   }
 });
 
-// 6. POST /transfer - add magnet link, poll for cache/completion, stream to Google Drive
+// 6. POST /transfer - add magnet link to Seedr cloud
 seedrRoutes.post('/transfer', requireCsrf, async (c) => {
   const user = c.get('user')!;
   const body = (await c.req.json().catch(() => ({}))) as {
@@ -225,82 +223,21 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
   }
 
   try {
-    // 1. Add magnet to Seedr cloud
+    // Add magnet to Seedr cloud — returns immediately.
+    // Seedr will download the torrent in the background.
+    // The frontend auto-polls /status and shows completed items in "Ready in Seedr Cloud".
     const addRes = await addSeedrMagnet(c.env, user.id, magnet);
 
-    // 2. Poll Seedr cloud for up to 8s (4 checks x 2s) to catch instant or fast cache
-    let directDownloadUrl: string | null = null;
-    let finalFilename = body.filename || addRes.title || 'Torrent Download';
-    let seedrItemId: string | number | null = null;
-    let seedrItemType: 'file' | 'folder' | 'torrent' = 'torrent';
-
-    for (let i = 0; i < 4; i++) {
-      const contents = await getSeedrContents(c.env, user.id);
-      if (contents.files.length > 0) {
-        const topFile = contents.files[0];
-        directDownloadUrl = await fetchSeedrFileUrl(c.env, user.id, topFile.id);
-        finalFilename = body.filename || topFile.name || finalFilename;
-        seedrItemId = topFile.id;
-        seedrItemType = 'file';
-        break;
-      } else if (contents.folders.length > 0) {
-        const topFolder = contents.folders[0];
-        directDownloadUrl = await createSeedrArchiveUrl(c.env, user.id, topFolder.id);
-        finalFilename = body.filename || `${topFolder.name}.zip`;
-        seedrItemId = topFolder.id;
-        seedrItemType = 'folder';
-        break;
-      }
-
-      if (i < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-    }
-
-    // 3. If direct URL is available, initiate Google Drive transfer job
-    if (directDownloadUrl) {
-      const idempotencyKey = crypto.randomUUID();
-      const { job, isExisting } = await createRemoteJob(c.env, user.id, idempotencyKey, {
-        url: directDownloadUrl,
-        filename: finalFilename,
-        folderId: body.folderId || undefined,
-      });
-
-      // Trigger Workflow
-      if (!isExisting && c.env.DRIVE_TRANSFER) {
-        await c.env.DRIVE_TRANSFER.create({
-          id: `job-${job.id}`,
-          params: { jobId: job.id, userId: user.id },
-        });
-      }
-
-      // Cleanup item from Seedr cloud in background to free quota
-      if (seedrItemId) {
-        c.executionCtx.waitUntil(
-          deleteSeedrItem(c.env, user.id, seedrItemType, seedrItemId)
-        );
-      }
-
-      return c.json({
-        success: true,
-        status: 'transferring',
-        jobId: job.id,
-        title: finalFilename,
-        message: 'Torrent ready! Transferring directly to Google Drive...',
-      });
-    }
-
-    // Otherwise Seedr is downloading the torrent in the cloud
     return c.json({
       success: true,
       status: 'downloading',
       userTorrentId: addRes.user_torrent_id,
       title: addRes.title || 'Torrent Download',
-      message: 'Seedr is downloading torrent to cloud. Once ready, it will appear below for transfer.',
+      message: 'Torrent added to Seedr cloud. It will appear in "Ready in Seedr Cloud" once downloaded.',
     });
   } catch (err) {
     return c.json(
-      { error: (err as Error).message || 'Failed to process magnet link on Seedr' },
+      { error: (err as Error).message || 'Failed to add magnet link to Seedr' },
       500
     );
   }

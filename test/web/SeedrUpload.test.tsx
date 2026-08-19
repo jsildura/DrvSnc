@@ -138,9 +138,10 @@ describe('Seedr Magnet Upload Form UI', () => {
       if (url.includes('/api/v1/seedr/transfer')) {
         return mockJsonResponse({
           success: true,
-          status: 'transferring',
-          jobId: 'job-seedr-123',
-          message: 'Torrent ready! Transferring directly to Google Drive...',
+          status: 'downloading',
+          userTorrentId: 12345,
+          title: 'Test Torrent Download',
+          message: 'Torrent added to Seedr cloud. It will appear in "Ready in Seedr Cloud" once downloaded.',
         });
       }
       if (url.includes('/api/v1/seedr/disconnect') && init?.method === 'DELETE') {
@@ -170,8 +171,8 @@ describe('Seedr Magnet Upload Form UI', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(onJobCreatedMock).toHaveBeenCalled();
-      expect(screen.getByText(/Torrent ready! Transferring directly to Google Drive\.\.\./i)).toBeTruthy();
+      // status is 'downloading', so onJobCreated should NOT be called (no Drive job yet)
+      expect(screen.getByText(/Torrent added to Seedr cloud/i)).toBeTruthy();
     });
 
     // Click Disconnect button
