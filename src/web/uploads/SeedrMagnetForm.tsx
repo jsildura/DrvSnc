@@ -314,7 +314,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
                     href={deviceCodeData.verification_url || 'https://www.seedr.cc/devices'}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-colors"
+                    className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-colors"
                   >
                     <span>Open seedr.cc/devices</span>
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -333,18 +333,33 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
                           setDeviceCodeData(null);
                           fetchStatus();
                         } else {
-                          setAuthError('Seedr has not confirmed authorization yet. Please make sure you clicked "ADD +" on seedr.cc/devices.');
+                          setAuthError('Seedr authorization pending. If you previously approved an older code, please click "Cancel or Generate New Code" below.');
                         }
                       } catch (err) {
                         setAuthError((err as Error).message);
                       }
                     }}
-                    className="w-full py-2.5 px-4 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shrink-0"
+                    className="w-full sm:flex-1 py-2.5 px-4 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                     <span>I Approved on Seedr</span>
+                  </button>
+                </div>
+
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+                      setDeviceCodeData(null);
+                      setIsAuthorizing(false);
+                      setAuthError(null);
+                    }}
+                    className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 underline transition-colors"
+                  >
+                    Cancel or Generate New Code
                   </button>
                 </div>
               </div>
