@@ -31,7 +31,7 @@ export const seedrRoutes = new Hono<{
 // All Seedr routes require active session
 seedrRoutes.use('*', requireSession);
 
-// 1. GET /status - check connection status, premium tier & real space quota
+// 1. GET /status - check connection status, premium tier, quota & cloud items
 seedrRoutes.get('/status', async (c) => {
   const user = c.get('user')!;
   const creds = await getSeedrCredentials(c.env, user.id);
@@ -48,7 +48,10 @@ seedrRoutes.get('/status', async (c) => {
       getSeedrContents(c.env, user.id).catch(() => null),
     ]);
 
-    const spaceUsed = settings?.spaceUsed ?? contents?.space_used ?? 0;
+    const spaceUsed = Math.max(
+      settings?.spaceUsed ?? 0,
+      contents?.space_used ?? 0
+    );
     const spaceMax = settings?.spaceMax ?? contents?.space_max ?? 2147483648;
     const isPremium = settings?.isPremium ?? false;
     const packageName = settings?.packageName ?? (isPremium ? 'Premium' : 'Free');
@@ -63,6 +66,8 @@ seedrRoutes.get('/status', async (c) => {
       spaceUsed,
       spaceMax,
       torrents: contents?.torrents || [],
+      folders: contents?.folders || [],
+      files: contents?.files || [],
     });
   } catch (err) {
     return c.json({
@@ -73,6 +78,8 @@ seedrRoutes.get('/status', async (c) => {
       spaceUsed: 0,
       spaceMax: 2147483648,
       torrents: [],
+      folders: [],
+      files: [],
     });
   }
 });
@@ -98,74 +105,112 @@ seedrRoutes.post('/login', requireCsrf, async (c) => {
       c.env,
       user.id,
       tokens.access_token,
-      tokens.refresh_token,
+      tokens.refresh_token || '',
       username
     );
-    return c.json({ success: true, username });
-  } catch (err) {
-    return c.json(
-      { error: (err as Error).message || 'Invalid Seedr login credentials' },
-      400
-    );
-  }
-});
-
-// 2. POST /device/code - initiate device code flow
-seedrRoutes.post('/device/code', async (c) => {
-  try {
-    const data = await getSeedrDeviceCode();
-    return c.json(data);
-  } catch (err) {
-    return c.json(
-      { error: (err as Error).message || 'Failed to get Seedr device code' },
-      500
-    );
-  }
-});
-
-// 3. POST /device/authorize - poll/finalize authorization
-seedrRoutes.post('/device/authorize', async (c) => {
-  const user = c.get('user')!;
-  const body = (await c.req.json().catch(() => ({}))) as { deviceCode?: string };
-  const deviceCode = body.deviceCode;
-
-  if (!deviceCode) {
-    return c.json({ error: 'deviceCode is required' }, 400);
-  }
-
-  try {
-    const res = await pollSeedrDeviceAuthorization(deviceCode);
-    if (res.status && res.tokens) {
-      await saveSeedrCredentials(
-        c.env,
-        user.id,
-        res.tokens.access_token,
-        res.tokens.refresh_token,
-        'Seedr Account'
-      );
-      return c.json({ success: true });
-    }
 
     return c.json({
-      success: false,
-      response: res.response || 'pending',
+      success: true,
+      username,
     });
   } catch (err) {
     return c.json(
-      { error: (err as Error).message || 'Authorization failed' },
-      500
+      { error: (err as Error).message || 'Invalid Seedr email or password' },
+      401
     );
   }
 });
 
-// 4. DELETE /disconnect - disconnect Seedr account
+// 3. DELETE /disconnect - disconnect Seedr account
 seedrRoutes.delete('/disconnect', requireCsrf, async (c) => {
   const user = c.get('user')!;
   await deleteSeedrCredentials(c.env, user.id);
   return c.json({ success: true });
 });
 
-// 5. POST /transfer - add magnet link, stream to Google Drive
+// 4. POST /transfer-item - stream an existing Seedr folder or file directly into Google Drive
+seedrRoutes.post('/transfer-item', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    itemType?: 'folder' | 'file';
+    itemId?: string | number;
+    itemName?: string;
+    folderId?: string;
+    filename?: string;
+  };
+
+  if (!body.itemId || !body.itemType) {
+    return c.json({ error: 'itemId and itemType are required' }, 400);
+  }
+
+  try {
+    let directDownloadUrl: string;
+    let finalFilename = body.filename || body.itemName || (body.itemType === 'folder' ? 'Archive.zip' : 'Download');
+
+    if (body.itemType === 'folder') {
+      directDownloadUrl = await createSeedrArchiveUrl(c.env, user.id, body.itemId);
+      if (!finalFilename.toLowerCase().endsWith('.zip')) {
+        finalFilename = `${finalFilename}.zip`;
+      }
+    } else {
+      directDownloadUrl = await fetchSeedrFileUrl(c.env, user.id, body.itemId);
+    }
+
+    const idempotencyKey = crypto.randomUUID();
+    const { job, isExisting } = await createRemoteJob(c.env, user.id, idempotencyKey, {
+      url: directDownloadUrl,
+      filename: finalFilename,
+      folderId: body.folderId || undefined,
+    });
+
+    if (!isExisting && c.env.DRIVE_TRANSFER) {
+      await c.env.DRIVE_TRANSFER.create({
+        id: `job-${job.id}`,
+        params: { jobId: job.id, userId: user.id },
+      });
+    }
+
+    // Auto cleanup from Seedr
+    c.executionCtx.waitUntil(
+      deleteSeedrItem(c.env, user.id, body.itemType, body.itemId)
+    );
+
+    return c.json({
+      success: true,
+      status: 'transferring',
+      jobId: job.id,
+      title: finalFilename,
+      message: `Started transfer for "${finalFilename}" to Google Drive!`,
+    });
+  } catch (err) {
+    return c.json(
+      { error: (err as Error).message || 'Failed to start transfer' },
+      500
+    );
+  }
+});
+
+// 5. DELETE /item - delete item from Seedr cloud
+seedrRoutes.delete('/item', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    itemType?: 'torrent' | 'folder' | 'file';
+    itemId?: string | number;
+  };
+
+  if (!body.itemId || !body.itemType) {
+    return c.json({ error: 'itemId and itemType are required' }, 400);
+  }
+
+  try {
+    await deleteSeedrItem(c.env, user.id, body.itemType, body.itemId);
+    return c.json({ success: true });
+  } catch (err) {
+    return c.json({ error: (err as Error).message || 'Failed to delete item' }, 500);
+  }
+});
+
+// 6. POST /transfer - add magnet link, poll for cache/completion, stream to Google Drive
 seedrRoutes.post('/transfer', requireCsrf, async (c) => {
   const user = c.get('user')!;
   const body = (await c.req.json().catch(() => ({}))) as {
@@ -183,27 +228,33 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
     // 1. Add magnet to Seedr cloud
     const addRes = await addSeedrMagnet(c.env, user.id, magnet);
 
-    // 2. Poll/Inspect Seedr contents to check if file completed immediately (cached)
-    const contents = await getSeedrContents(c.env, user.id);
-
-    // Check if a folder or file was created with files ready
+    // 2. Poll Seedr cloud for up to 8s (4 checks x 2s) to catch instant or fast cache
     let directDownloadUrl: string | null = null;
     let finalFilename = body.filename || addRes.title || 'Torrent Download';
     let seedrItemId: string | number | null = null;
     let seedrItemType: 'file' | 'folder' | 'torrent' = 'torrent';
 
-    if (contents.files.length > 0) {
-      const topFile = contents.files[0];
-      directDownloadUrl = await fetchSeedrFileUrl(c.env, user.id, topFile.id);
-      finalFilename = body.filename || topFile.name || finalFilename;
-      seedrItemId = topFile.id;
-      seedrItemType = 'file';
-    } else if (contents.folders.length > 0) {
-      const topFolder = contents.folders[0];
-      directDownloadUrl = await createSeedrArchiveUrl(c.env, user.id, topFolder.id);
-      finalFilename = body.filename || `${topFolder.name}.zip`;
-      seedrItemId = topFolder.id;
-      seedrItemType = 'folder';
+    for (let i = 0; i < 4; i++) {
+      const contents = await getSeedrContents(c.env, user.id);
+      if (contents.files.length > 0) {
+        const topFile = contents.files[0];
+        directDownloadUrl = await fetchSeedrFileUrl(c.env, user.id, topFile.id);
+        finalFilename = body.filename || topFile.name || finalFilename;
+        seedrItemId = topFile.id;
+        seedrItemType = 'file';
+        break;
+      } else if (contents.folders.length > 0) {
+        const topFolder = contents.folders[0];
+        directDownloadUrl = await createSeedrArchiveUrl(c.env, user.id, topFolder.id);
+        finalFilename = body.filename || `${topFolder.name}.zip`;
+        seedrItemId = topFolder.id;
+        seedrItemType = 'folder';
+        break;
+      }
+
+      if (i < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
 
     // 3. If direct URL is available, initiate Google Drive transfer job
@@ -224,7 +275,7 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
       }
 
       // Cleanup item from Seedr cloud in background to free quota
-      if (seedrItemId && c.executionCtx) {
+      if (seedrItemId) {
         c.executionCtx.waitUntil(
           deleteSeedrItem(c.env, user.id, seedrItemType, seedrItemId)
         );
@@ -239,18 +290,18 @@ seedrRoutes.post('/transfer', requireCsrf, async (c) => {
       });
     }
 
-    // Otherwise Seedr is downloading the torrent from the swarm
+    // Otherwise Seedr is downloading the torrent in the cloud
     return c.json({
       success: true,
       status: 'downloading',
       userTorrentId: addRes.user_torrent_id,
       title: addRes.title || 'Torrent Download',
-      message: 'Seedr is downloading torrent to cloud. Once ready, it will transfer to Google Drive.',
+      message: 'Seedr is downloading torrent to cloud. Once ready, it will appear below for transfer.',
     });
   } catch (err) {
     return c.json(
       { error: (err as Error).message || 'Failed to process magnet link on Seedr' },
-      400
+      500
     );
   }
 });

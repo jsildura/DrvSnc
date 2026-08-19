@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   getSeedrStatus,
   loginSeedrAccount,
   disconnectSeedr,
   submitSeedrTransfer,
+  transferSeedrItem,
+  deleteSeedrCloudItem,
   SeedrStatusResponse,
+  SeedrItemView,
+  SeedrTorrentItemView,
 } from '../api/seedr';
 import { FolderPicker } from '../components/FolderPicker';
 
@@ -37,6 +41,12 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transferMessage, setTransferMessage] = useState<{ text: string; variant: 'success' | 'error' | 'info' } | null>(null);
 
+  // Action states for existing items in Seedr cloud
+  const [transferringItemId, setTransferringItemId] = useState<string | number | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | number | null>(null);
+
+  const pollTimerRef = useRef<any>(null);
+
   const fetchStatus = async () => {
     try {
       const res = await getSeedrStatus();
@@ -51,6 +61,21 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
   useEffect(() => {
     fetchStatus();
   }, []);
+
+  // Auto-poll when there are active torrents or items in Seedr cloud
+  useEffect(() => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+
+    if (seedrStatus.connected && (seedrStatus.torrents?.length || isSubmitting)) {
+      pollTimerRef.current = setInterval(() => {
+        fetchStatus();
+      }, 3500);
+    }
+
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, [seedrStatus.connected, seedrStatus.torrents?.length, isSubmitting]);
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +124,10 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
     }
 
     setIsSubmitting(true);
-    setTransferMessage(null);
+    setTransferMessage({
+      text: 'Adding torrent to Seedr cloud & checking cache...',
+      variant: 'info',
+    });
 
     try {
       const res = await submitSeedrTransfer({
@@ -109,13 +137,15 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
       });
 
       setTransferMessage({
-        text: res.message || 'Torrent added! Transferring to Google Drive...',
+        text: res.message || 'Torrent added to Seedr cloud!',
         variant: 'success',
       });
       setMagnetLink('');
       setCustomFilename('');
-      onJobCreated();
-      fetchStatus();
+      if (res.status === 'transferring') {
+        onJobCreated();
+      }
+      await fetchStatus();
     } catch (err) {
       setTransferMessage({
         text: (err as Error).message || 'Failed to transfer torrent',
@@ -123,6 +153,55 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Transfer an existing folder or file directly from Seedr to Google Drive
+  const handleTransferExistingItem = async (
+    itemType: 'folder' | 'file',
+    item: SeedrItemView
+  ) => {
+    setTransferringItemId(item.id);
+    setTransferMessage(null);
+    try {
+      const res = await transferSeedrItem({
+        itemType,
+        itemId: item.id,
+        itemName: item.name,
+        folderId: selectedFolderId || undefined,
+      });
+
+      setTransferMessage({
+        text: res.message || `Transfer started for "${item.name}"!`,
+        variant: 'success',
+      });
+      onJobCreated();
+      await fetchStatus();
+    } catch (err) {
+      setTransferMessage({
+        text: (err as Error).message || `Failed to transfer "${item.name}"`,
+        variant: 'error',
+      });
+    } finally {
+      setTransferringItemId(null);
+    }
+  };
+
+  // Delete an item directly from Seedr cloud
+  const handleDeleteItem = async (
+    itemType: 'torrent' | 'folder' | 'file',
+    itemId: string | number,
+    name: string
+  ) => {
+    if (!confirm(`Delete "${name}" from Seedr cloud?`)) return;
+    setDeletingItemId(itemId);
+    try {
+      await deleteSeedrCloudItem({ itemType, itemId });
+      await fetchStatus();
+    } catch (err) {
+      alert((err as Error).message || 'Failed to delete item from Seedr');
+    } finally {
+      setDeletingItemId(null);
     }
   };
 
@@ -255,14 +334,21 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
   }
 
   // =========================================================================
-  // VIEW 2: CONNECTED (Magnet Link & Torrent Submission Form)
+  // VIEW 2: CONNECTED (Magnet Submission & Cloud Items List)
   // =========================================================================
   const usedSpace = seedrStatus.spaceUsed || 0;
   const maxSpace = seedrStatus.spaceMax || 2147483648;
   const usedPercent = Math.min(100, Math.round((usedSpace / maxSpace) * 100));
 
+  const hasCloudItems = Boolean(
+    (seedrStatus.folders && seedrStatus.folders.length > 0) ||
+    (seedrStatus.files && seedrStatus.files.length > 0)
+  );
+
+  const hasTorrents = Boolean(seedrStatus.torrents && seedrStatus.torrents.length > 0);
+
   return (
-    <form onSubmit={handleSubmitTransfer} className="space-y-5">
+    <div className="space-y-6">
       {/* Account, Space Meter Bar & Disconnect Button */}
       <div className="p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-900/50 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2 min-w-0">
@@ -308,68 +394,237 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
         </div>
       </div>
 
-      {/* Magnet Link Input Field */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-          Magnet Link or Torrent Info Hash
-        </label>
-        <textarea
-          required
-          rows={3}
-          value={magnetLink}
-          onChange={(e) => setMagnetLink(e.target.value)}
-          placeholder="magnet:?xt=urn:btih:..."
-          className="w-full font-mono text-xs p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-        />
-      </div>
+      {/* SECTION A: READY IN SEEDR CLOUD STORAGE (Folders / Files Ready to Transfer) */}
+      {hasCloudItems && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-900/60 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                Ready in Seedr Cloud ({seedrStatus.folders?.length || 0} folders, {seedrStatus.files?.length || 0} files)
+              </h4>
+            </div>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Click Transfer to stream directly to Google Drive
+            </span>
+          </div>
 
-      {/* Custom Target Filename */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-          Target Filename (Optional)
-        </label>
-        <input
-          type="text"
-          value={customFilename}
-          onChange={(e) => setCustomFilename(e.target.value)}
-          placeholder="e.g. MyDownloadedMovie.mp4 or Dataset.zip"
-          className="w-full text-xs p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-      </div>
+          <div className="space-y-2">
+            {/* Folders List */}
+            {seedrStatus.folders?.map((folder) => (
+              <div
+                key={`folder-${folder.id}`}
+                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center justify-between gap-3 text-xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 dark:text-white truncate" title={folder.name}>
+                      {folder.name}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {formatBytes(folder.size)} • Folder (will download as ZIP)
+                    </p>
+                  </div>
+                </div>
 
-      {/* Destination Folder Selector */}
-      <FolderPicker
-        selectedFolderId={selectedFolderId}
-        selectedFolderName={selectedFolderName}
-        onSelect={(folderId, folderName) => {
-          setSelectedFolderId(folderId);
-          setSelectedFolderName(folderName);
-        }}
-      />
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleTransferExistingItem('folder', folder)}
+                    disabled={transferringItemId === folder.id}
+                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    <span>{transferringItemId === folder.id ? 'Transferring...' : 'Transfer to Drive'}</span>
+                  </button>
 
-      {/* Status / Error / Success Message */}
-      {transferMessage && (
-        <div
-          className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 ${transferMessage.variant === 'success'
-              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50'
-              : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/50'
-            }`}
-        >
-          <span>{transferMessage.text}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteItem('folder', folder.id, folder.name)}
+                    disabled={deletingItemId === folder.id}
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title="Delete from Seedr"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Individual Files List */}
+            {seedrStatus.files?.map((file) => (
+              <div
+                key={`file-${file.id}`}
+                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 flex items-center justify-between gap-3 text-xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 dark:text-white truncate" title={file.name}>
+                      {file.name}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {formatBytes(file.size)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleTransferExistingItem('file', file)}
+                    disabled={transferringItemId === file.id}
+                    className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    <span>{transferringItemId === file.id ? 'Transferring...' : 'Transfer to Drive'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteItem('file', file.id, file.name)}
+                    disabled={deletingItemId === file.id}
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title="Delete from Seedr"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Submit Button */}
-      <button
-        type="submit"
-        disabled={isSubmitting || !magnetLink.trim()}
-        className="w-full py-3 px-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-        <span>{isSubmitting ? 'Adding Torrent to Cloud...' : 'Download Magnet & Transfer to Drive'}</span>
-      </button>
-    </form>
+      {/* SECTION B: ACTIVE TORRENTS DOWNLOADING IN SEEDR SWARM */}
+      {hasTorrents && (
+        <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping" />
+              <span>Downloading in Seedr Cloud ({seedrStatus.torrents?.length})</span>
+            </div>
+            <span className="text-slate-500 dark:text-slate-400 font-normal">Auto-refreshing...</span>
+          </div>
+
+          <div className="space-y-2">
+            {seedrStatus.torrents?.map((torrent: SeedrTorrentItemView) => (
+              <div
+                key={`torrent-${torrent.id}`}
+                className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/50 space-y-2 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900 dark:text-white truncate" title={torrent.name}>
+                    {torrent.name}
+                  </span>
+                  <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
+                    {Math.round(torrent.progress)}%
+                  </span>
+                </div>
+
+                <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all duration-300"
+                    style={{ width: `${Math.max(5, torrent.progress)}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                  <span>{formatBytes(torrent.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteItem('torrent', torrent.id, torrent.name)}
+                    className="text-rose-500 hover:underline"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* SECTION C: NEW MAGNET LINK SUBMISSION FORM */}
+      <form onSubmit={handleSubmitTransfer} className="space-y-5">
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Magnet Link or Torrent Info Hash
+          </label>
+          <textarea
+            required
+            rows={3}
+            value={magnetLink}
+            onChange={(e) => setMagnetLink(e.target.value)}
+            placeholder="magnet:?xt=urn:btih:..."
+            className="w-full font-mono text-xs p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Target Filename (Optional)
+          </label>
+          <input
+            type="text"
+            value={customFilename}
+            onChange={(e) => setCustomFilename(e.target.value)}
+            placeholder="e.g. MyDownloadedMovie.mp4 or Dataset.zip"
+            className="w-full text-xs p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+
+        <FolderPicker
+          selectedFolderId={selectedFolderId}
+          selectedFolderName={selectedFolderName}
+          onSelect={(folderId, folderName) => {
+            setSelectedFolderId(folderId);
+            setSelectedFolderName(folderName);
+          }}
+        />
+
+        {transferMessage && (
+          <div
+            className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 ${
+              transferMessage.variant === 'success'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50'
+                : transferMessage.variant === 'info'
+                ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/50'
+                : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/50'
+            }`}
+          >
+            <span>{transferMessage.text}</span>
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={isSubmitting || !magnetLink.trim()}
+          className="w-full py-3 px-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span>{isSubmitting ? 'Adding Torrent to Cloud...' : 'Download Magnet & Transfer to Drive'}</span>
+        </button>
+      </form>
+    </div>
   );
 }

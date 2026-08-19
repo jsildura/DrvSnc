@@ -70,6 +70,54 @@ describe('Seedr Magnet Upload Form UI', () => {
     });
   });
 
+  it('renders completed cloud folders and transfers existing folder to Google Drive', async () => {
+    const onJobCreatedMock = vi.fn();
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/api/v1/seedr/status')) {
+        return mockJsonResponse({
+          connected: true,
+          username: 'Tester Seedr',
+          spaceUsed: 349603840,
+          spaceMax: 3758096384,
+          folders: [
+            { id: 998877, name: 'LCD Soundsystem - Sound of Silver (2007) FLAC', size: 349603840 },
+          ],
+          files: [],
+          torrents: [],
+        });
+      }
+      if (url.includes('/api/v1/seedr/transfer-item') && init?.method === 'POST') {
+        return mockJsonResponse({
+          success: true,
+          status: 'transferring',
+          jobId: 'job-transfer-item-123',
+          message: 'Started transfer for "LCD Soundsystem - Sound of Silver (2007) FLAC" to Google Drive!',
+        });
+      }
+      return mockJsonResponse({});
+    });
+
+    render(<UploadForm onJobCreated={onJobCreatedMock} />);
+
+    // Switch to Magnet tab
+    const magnetTab = screen.getByRole('button', { name: /Magnet \/ Torrent/i });
+    fireEvent.click(magnetTab);
+
+    // Wait for the completed folder to be shown
+    const folderTitle = await screen.findByText(/LCD Soundsystem - Sound of Silver/i);
+    expect(folderTitle).toBeTruthy();
+
+    // Click Transfer to Drive
+    const transferBtn = screen.getByRole('button', { name: /^Transfer to Drive$/i });
+    fireEvent.click(transferBtn);
+
+    await waitFor(() => {
+      expect(onJobCreatedMock).toHaveBeenCalled();
+      expect(screen.getByText(/Started transfer for "LCD Soundsystem - Sound of Silver/i)).toBeTruthy();
+    });
+  });
+
   it('renders magnet input form when connected, submits transfer, and allows disconnecting', async () => {
     const onJobCreatedMock = vi.fn();
     let disconnected = false;
