@@ -6,6 +6,9 @@ import { App } from '../../src/web/App';
 describe('Web Client Application Shell (<App />)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // jsdom shares one `location` across a file, and the app now seeds its active
+    // tab from the path — reset so tests don't inherit each other's URL.
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders Google sign-in screen when user is unauthenticated', async () => {

@@ -444,11 +444,17 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
     if (requestedExportMime) {
       upstreamRes = await exportFile(c.env, user.id, fileId, requestedExportMime);
     } else {
-      upstreamRes = await downloadFile(c.env, user.id, fileId);
+      try {
+        upstreamRes = await downloadFile(c.env, user.id, fileId);
+      } catch (dlErr) {
+        // If file is a Google Doc/Sheet/Slide, Google returns 400/403 for direct alt=media download
+        // Fall back to PDF export automatically
+        upstreamRes = await exportFile(c.env, user.id, fileId, 'application/pdf');
+      }
     }
 
     const headers = new Headers();
-    const contentType = upstreamRes.headers.get('Content-Type') || 'application/octet-stream';
+    const contentType = upstreamRes.headers.get('Content-Type') || (requestedExportMime || 'application/octet-stream');
     headers.set('Content-Type', contentType);
 
     const contentLength = upstreamRes.headers.get('Content-Length');
@@ -457,6 +463,8 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
     const contentDisposition = upstreamRes.headers.get('Content-Disposition');
     if (contentDisposition) {
       headers.set('Content-Disposition', contentDisposition);
+    } else if (contentType.includes('pdf')) {
+      headers.set('Content-Disposition', 'inline');
     }
 
     return new Response(upstreamRes.body, {

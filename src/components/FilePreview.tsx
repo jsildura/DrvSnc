@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
-  Dialog,
   IconButton,
   Box,
   Typography,
@@ -42,6 +41,11 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import AudioFileIcon from '@mui/icons-material/AudioFile';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import SlideshowIcon from '@mui/icons-material/Slideshow';
+
+import { renderAsync as renderDocx } from 'docx-preview';
+import * as XLSX from 'xlsx';
 
 export interface FilePreviewItem {
   id?: string;
@@ -88,6 +92,9 @@ type PreviewKind =
   | 'gdoc'
   | 'gsheet'
   | 'gslide'
+  | 'docx'
+  | 'xlsx'
+  | 'pptx'
   | 'office'
   | 'unsupported';
 
@@ -101,10 +108,24 @@ function detectPreviewKind(filename?: string, mimeType?: string): PreviewKind {
   const ext = getFileExtension(filename);
   const mime = (mimeType || '').toLowerCase();
 
-  // Google Workspace apps
+  // Google Workspace native types
   if (mime.includes('vnd.google-apps.document')) return 'gdoc';
   if (mime.includes('vnd.google-apps.spreadsheet')) return 'gsheet';
   if (mime.includes('vnd.google-apps.presentation')) return 'gslide';
+
+  // Microsoft Office Word
+  if (ext === 'docx' || mime.includes('wordprocessingml.document')) return 'docx';
+  if (ext === 'doc' || mime.includes('msword')) return 'docx';
+
+  // Microsoft Office Excel
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'ods' || mime.includes('spreadsheetml.sheet') || mime.includes('ms-excel')) {
+    return 'xlsx';
+  }
+
+  // Microsoft Office PowerPoint
+  if (ext === 'pptx' || ext === 'ppt' || ext === 'odp' || mime.includes('presentationml.presentation') || mime.includes('ms-powerpoint')) {
+    return 'pptx';
+  }
 
   // Images
   const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif', 'tiff'];
@@ -146,9 +167,8 @@ function detectPreviewKind(filename?: string, mimeType?: string): PreviewKind {
     return 'code';
   }
 
-  // Office docs
-  const officeExts = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'odt', 'ods', 'odp'];
-  if (officeExts.includes(ext) || mime.includes('word') || mime.includes('sheet') || mime.includes('presentation')) {
+  // Other office types
+  if (['odt', 'ods', 'odp', 'rtf'].includes(ext)) {
     return 'office';
   }
 
@@ -164,80 +184,40 @@ function formatBytes(bytes?: number | null): string {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
-function getGoogleAppOptions(fileId: string, mimeType?: string, filename?: string) {
+function getGoogleAppInfo(fileId: string, previewKind: PreviewKind, mimeType?: string, filename?: string) {
   const ext = getFileExtension(filename);
-  const apps: Array<{ name: string; url: string; icon: string }> = [];
 
-  if (
-    mimeType?.includes('document') ||
-    mimeType?.includes('text') ||
-    mimeType?.includes('word') ||
-    ['doc', 'docx', 'txt', 'rtf', 'odt'].includes(ext)
-  ) {
-    apps.push({
+  if (previewKind === 'gdoc' || previewKind === 'docx' || ext === 'doc' || ext === 'docx' || mimeType?.includes('document') || mimeType?.includes('word')) {
+    return {
       name: 'Google Docs',
       url: `https://docs.google.com/document/d/${fileId}/edit`,
+      color: 'bg-blue-600 hover:bg-blue-500 text-white',
+      badge: 'Doc',
       icon: 'doc',
-    });
+    };
   }
 
-  if (
-    mimeType?.includes('spreadsheet') ||
-    mimeType?.includes('excel') ||
-    mimeType?.includes('csv') ||
-    ['xls', 'xlsx', 'csv', 'tsv', 'ods'].includes(ext)
-  ) {
-    apps.push({
+  if (previewKind === 'gsheet' || previewKind === 'xlsx' || ext === 'xls' || ext === 'xlsx' || ext === 'csv' || mimeType?.includes('spreadsheet') || mimeType?.includes('excel')) {
+    return {
       name: 'Google Sheets',
       url: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+      color: 'bg-emerald-600 hover:bg-emerald-500 text-white',
+      badge: 'Sheet',
       icon: 'sheet',
-    });
+    };
   }
 
-  if (
-    mimeType?.includes('presentation') ||
-    mimeType?.includes('powerpoint') ||
-    ['ppt', 'pptx', 'odp'].includes(ext)
-  ) {
-    apps.push({
+  if (previewKind === 'gslide' || previewKind === 'pptx' || ext === 'ppt' || ext === 'pptx' || mimeType?.includes('presentation') || mimeType?.includes('powerpoint')) {
+    return {
       name: 'Google Slides',
       url: `https://docs.google.com/presentation/d/${fileId}/edit`,
-      icon: 'slides',
-    });
+      color: 'bg-amber-600 hover:bg-amber-500 text-white',
+      badge: 'Slides',
+      icon: 'slide',
+    };
   }
 
-  apps.push({
-    name: 'Google Drive Viewer',
-    url: `https://drive.google.com/file/d/${fileId}/view`,
-    icon: 'drive',
-  });
-
-  return apps;
-}
-
-function getTypeIcon(kind: PreviewKind) {
-  switch (kind) {
-    case 'image':
-      return <ImageIcon sx={{ color: '#f43f5e' }} />;
-    case 'video':
-      return <VideocamIcon sx={{ color: '#a855f7' }} />;
-    case 'audio':
-      return <AudioFileIcon sx={{ color: '#f59e0b' }} />;
-    case 'pdf':
-      return <DescriptionIcon sx={{ color: '#ef4444' }} />;
-    case 'csv':
-    case 'gsheet':
-      return <TableChartIcon sx={{ color: '#10b981' }} />;
-    case 'gdoc':
-      return <DescriptionIcon sx={{ color: '#3b82f6' }} />;
-    case 'gslide':
-      return <DescriptionIcon sx={{ color: '#f97316' }} />;
-    case 'code':
-    case 'markdown':
-      return <CodeIcon sx={{ color: '#6366f1' }} />;
-    default:
-      return <InsertDriveFileIcon sx={{ color: '#94a3b8' }} />;
-  }
+  return null;
 }
 
 export default function FilePreview({
@@ -257,7 +237,6 @@ export default function FilePreview({
   currentIndex: propCurrentIndex,
   onNavigate,
 }: FilePreviewProps) {
-  // Navigation active index state
   const [activeIndex, setActiveIndex] = useState<number>(propCurrentIndex ?? 0);
 
   useEffect(() => {
@@ -266,7 +245,6 @@ export default function FilePreview({
     }
   }, [propCurrentIndex]);
 
-  // Theme state: reactive to MUI ThemeProvider and document dark class
   const muiTheme = useTheme();
   const [docDark, setDocDark] = useState<boolean>(() => {
     if (typeof document !== 'undefined') {
@@ -288,7 +266,6 @@ export default function FilePreview({
 
   const isDarkMode = (muiTheme?.palette?.mode === 'dark') || docDark;
 
-  // Derived current file item
   const currentItem = files && files.length > 0 && files[activeIndex] ? files[activeIndex] : null;
   const fileId = currentItem?.id || currentItem?.fileId || propFileId || '';
   const fileName = currentItem?.name || currentItem?.fileName || propFileName || 'Unnamed file';
@@ -310,6 +287,22 @@ export default function FilePreview({
   const [showInfo, setShowInfo] = useState(false);
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // PDF & Google Workspace export state
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // DOCX rendering state
+  const docxContainerRef = useRef<HTMLDivElement | null>(null);
+  const [docxError, setDocxError] = useState<string | null>(null);
+
+  // Excel / Spreadsheet state
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [activeSheetIndex, setActiveSheetIndex] = useState(0);
+  const [sheetGrid, setSheetGrid] = useState<any[][]>([]);
+  const [xlsxSearch, setXlsxSearch] = useState('');
+  const [xlsxError, setXlsxError] = useState<string | null>(null);
 
   // Image viewer state
   const [zoom, setZoom] = useState(1);
@@ -345,33 +338,142 @@ export default function FilePreview({
   const [audioVolume, setAudioVolume] = useState(1);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
 
+  // Cleanup old blob URLs
+  useEffect(() => {
+    return () => {
+      if (pdfBlobUrl) {
+        URL.revokeObjectURL(pdfBlobUrl);
+      }
+    };
+  }, [pdfBlobUrl]);
+
   // Reset transforms and state when switching files
   useEffect(() => {
+    if (pdfBlobUrl) {
+      URL.revokeObjectURL(pdfBlobUrl);
+      setPdfBlobUrl(null);
+    }
     setLoading(true);
     setZoom(1);
     setRotation(0);
     setPanOffset({ x: 0, y: 0 });
     setTextContent(null);
     setTextError(null);
+    setPdfError(null);
+    setDocxError(null);
+    setXlsxError(null);
+    setWorkbook(null);
+    setSheetNames([]);
+    setSheetGrid([]);
+    setActiveSheetIndex(0);
     setIsPlaying(false);
     setIsAudioPlaying(false);
     setActiveTab('preview');
   }, [fileId]);
 
-  // Fetch text content for code/markdown/csv
+  // Main file loading effect based on previewKind
   useEffect(() => {
     if (!open || !fileId) return;
 
-    if (previewKind === 'code' || previewKind === 'markdown' || previewKind === 'csv') {
-      let isSubscribed = true;
-      setLoading(true);
-      setTextError(null);
+    let isSubscribed = true;
+    setLoading(true);
 
-      fetch(fileUrl)
+    // 1. Google Workspace Files (.gdoc, .gsheet, .gslide) OR native PDF (.pdf)
+    if (previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide' || previewKind === 'pdf') {
+      const exportUrl =
+        previewKind === 'pdf'
+          ? fileUrl
+          : `/api/v1/drive/files/${encodeURIComponent(fileId)}/download?exportMimeType=application/pdf`;
+
+      fetch(exportUrl)
         .then(async (res) => {
           if (!res.ok) {
-            throw new Error(`Failed to load file content (${res.status})`);
+            throw new Error(`Failed to export preview (${res.status})`);
           }
+          const blob = await res.blob();
+          if (isSubscribed) {
+            const url = URL.createObjectURL(blob);
+            setPdfBlobUrl(url);
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (isSubscribed) {
+            setPdfError((err as Error).message || 'Unable to load PDF export');
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        isSubscribed = false;
+      };
+    }
+
+    // 2. Word .docx files (client-side render)
+    if (previewKind === 'docx') {
+      fetch(fileUrl)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`Failed to load Word document (${res.status})`);
+          const arrayBuffer = await res.arrayBuffer();
+          if (isSubscribed && docxContainerRef.current) {
+            docxContainerRef.current.innerHTML = '';
+            await renderDocx(arrayBuffer, docxContainerRef.current, undefined, {
+              inWrapper: true,
+              ignoreWidth: false,
+              ignoreHeight: false,
+              className: 'docx-preview-root',
+            });
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (isSubscribed) {
+            setDocxError((err as Error).message || 'Unable to render Word document');
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        isSubscribed = false;
+      };
+    }
+
+    // 3. Excel .xlsx / .xls files (client-side sheet parser)
+    if (previewKind === 'xlsx') {
+      fetch(fileUrl)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`Failed to load spreadsheet (${res.status})`);
+          const arrayBuffer = await res.arrayBuffer();
+          if (isSubscribed) {
+            const wb = XLSX.read(arrayBuffer, { type: 'array' });
+            setWorkbook(wb);
+            setSheetNames(wb.SheetNames);
+            if (wb.SheetNames.length > 0) {
+              const firstSheet = wb.Sheets[wb.SheetNames[0]];
+              const rawData = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' }) as any[][];
+              setSheetGrid(rawData);
+            }
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (isSubscribed) {
+            setXlsxError((err as Error).message || 'Unable to parse spreadsheet');
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        isSubscribed = false;
+      };
+    }
+
+    // 4. Code / Text / Markdown / CSV
+    if (previewKind === 'code' || previewKind === 'markdown' || previewKind === 'csv') {
+      setTextError(null);
+      fetch(fileUrl)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`Failed to load text content (${res.status})`);
           const text = await res.text();
           if (isSubscribed) {
             setTextContent(text);
@@ -388,13 +490,14 @@ export default function FilePreview({
       return () => {
         isSubscribed = false;
       };
-    } else if (previewKind === 'image') {
-      // Preload image
+    }
+
+    // 5. Images
+    if (previewKind === 'image') {
       const img = new Image();
       img.src = fileUrl;
       img.onload = () => setLoading(false);
       img.onerror = () => {
-        // Fallback to high-res thumbnail if available
         if (thumbnailLink) {
           const highRes = thumbnailLink.replace(/=s\d+/, '=s1600');
           img.src = highRes;
@@ -404,12 +507,27 @@ export default function FilePreview({
           setLoading(false);
         }
       };
-    } else {
-      // For video/audio/pdf/iframe, let elements handle loading
-      const timer = setTimeout(() => setLoading(false), 800);
-      return () => clearTimeout(timer);
+      return () => {
+        isSubscribed = false;
+      };
     }
+
+    // 6. PowerPoint or Other
+    const timer = setTimeout(() => setLoading(false), 800);
+    return () => {
+      isSubscribed = false;
+      clearTimeout(timer);
+    };
   }, [open, fileId, previewKind, fileUrl, thumbnailLink]);
+
+  // Handle Excel Sheet Switching
+  const handleSelectSheet = (index: number) => {
+    if (!workbook || !sheetNames[index]) return;
+    setActiveSheetIndex(index);
+    const sheet = workbook.Sheets[sheetNames[index]];
+    const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+    setSheetGrid(rawData);
+  };
 
   // Navigation handlers
   const handlePrev = useCallback(() => {
@@ -426,15 +544,12 @@ export default function FilePreview({
     onNavigate?.(nextIdx);
   }, [activeIndex, files, onNavigate]);
 
-  // Keyboard navigation & shortcuts
+  // Keyboard navigation
   useEffect(() => {
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
-        return;
-      }
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
 
       if (e.key === 'Escape') {
         onClose();
@@ -582,8 +697,9 @@ export default function FilePreview({
 
   // Print helper
   const handlePrint = () => {
-    if (previewKind === 'pdf' || previewKind === 'image' || previewKind === 'code') {
-      const printWindow = window.open(fileUrl, '_blank');
+    const targetUrl = pdfBlobUrl || fileUrl;
+    if (targetUrl) {
+      const printWindow = window.open(targetUrl, '_blank');
       if (printWindow) {
         printWindow.focus();
         printWindow.print();
@@ -602,151 +718,109 @@ export default function FilePreview({
     });
   };
 
-  // Copy code helper
-  const handleCopyCode = () => {
-    if (!textContent) return;
-    navigator.clipboard.writeText(textContent).then(() => {
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    });
-  };
-
-  const googleApps = getGoogleAppOptions(fileId, mimeType, fileName);
-
   const formatTime = (secs: number) => {
+    if (isNaN(secs) || secs === 0) return '0:00';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // CSV table parsing
-  const parsedCsvRows = React.useMemo(() => {
-    if (previewKind !== 'csv' || !textContent) return { headers: [], rows: [] };
-    const lines = textContent.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length === 0) return { headers: [], rows: [] };
+  const getTypeIcon = (kind: PreviewKind) => {
+    switch (kind) {
+      case 'image':
+        return <ImageIcon fontSize="small" sx={{ color: '#f43f5e' }} />;
+      case 'video':
+        return <VideocamIcon fontSize="small" sx={{ color: '#a855f7' }} />;
+      case 'audio':
+        return <AudioFileIcon fontSize="small" sx={{ color: '#f59e0b' }} />;
+      case 'pdf':
+        return <PictureAsPdfIcon fontSize="small" sx={{ color: '#ef4444' }} />;
+      case 'gdoc':
+      case 'docx':
+        return <DescriptionIcon fontSize="small" sx={{ color: '#2563eb' }} />;
+      case 'gsheet':
+      case 'xlsx':
+      case 'csv':
+        return <TableChartIcon fontSize="small" sx={{ color: '#10b981' }} />;
+      case 'gslide':
+      case 'pptx':
+        return <SlideshowIcon fontSize="small" sx={{ color: '#f59e0b' }} />;
+      case 'code':
+      case 'markdown':
+        return <CodeIcon fontSize="small" sx={{ color: '#6366f1' }} />;
+      default:
+        return <InsertDriveFileIcon fontSize="small" sx={{ color: '#64748b' }} />;
+    }
+  };
 
-    const parseLine = (line: string) => {
-      const isTsv = fileName.endsWith('.tsv');
-      if (isTsv) return line.split('\t');
-      // Simple CSV split matching quoted strings
-      const result: string[] = [];
-      let cur = '';
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"' || char === "'") {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          result.push(cur.trim());
-          cur = '';
-        } else {
-          cur += char;
-        }
-      }
-      result.push(cur.trim());
-      return result;
-    };
-
-    const headers = parseLine(lines[0]);
-    const rawRows = lines.slice(1).map(parseLine);
-    const rows = csvSearch
-      ? rawRows.filter((r) => r.some((cell) => cell.toLowerCase().includes(csvSearch.toLowerCase())))
-      : rawRows;
-
-    return { headers, rows };
-  }, [previewKind, textContent, fileName, csvSearch]);
+  const googleAppInfo = getGoogleAppInfo(fileId, previewKind, mimeType, fileName);
 
   if (!open) return null;
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      fullScreen
-      PaperProps={{
-        sx: {
-          bgcolor: isDarkMode ? '#0f172a' : '#f8fafc',
-          color: isDarkMode ? '#f8fafc' : '#0f172a',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          userSelect: 'none',
-        },
-      }}
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="preview-file-name"
+      className="fixed inset-0 z-50 flex flex-col bg-slate-950/80 backdrop-blur-md animate-fade-in"
     >
       {/* ========================================================================= */}
-      {/* GOOGLE DRIVE NATIVE PREVIEW TOPBAR                                       */}
+      {/* TOP HEADER BAR                                                            */}
       {/* ========================================================================= */}
-      <header className="h-14 shrink-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-3 sm:px-4 flex items-center justify-between gap-3 z-30">
-        {/* Left: Back / Close, File Icon, Name & Index */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-          <IconButton
-            size="small"
-            onClick={onClose}
-            title="Close (Esc)"
-            sx={{
-              color: isDarkMode ? '#94a3b8' : '#64748b',
-              '&:hover': {
-                color: isDarkMode ? '#ffffff' : '#0f172a',
-                bgcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-              },
-            }}
-          >
-            <ArrowBackIcon fontSize="small" />
-          </IconButton>
+      <header className="h-14 px-4 bg-white/95 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 z-30 shadow-xs select-none">
+        {/* Left: Back / File Info & Badge */}
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <Tooltip title="Back to Drive (Esc)">
+            <IconButton size="small" onClick={onClose} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
+              <ArrowBackIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
 
-          <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
             {getTypeIcon(previewKind)}
           </div>
 
-          <div className="min-w-0 flex flex-col">
-            <div className="flex items-center gap-2">
-              <span
-                className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[200px] sm:max-w-[400px] md:max-w-[550px]"
-                title={fileName}
-              >
-                {fileName}
+          <div className="min-w-0">
+            <h2 id="preview-file-name" className="text-sm font-bold text-slate-900 dark:text-white truncate" title={fileName}>
+              {fileName}
+            </h2>
+            <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+              <span>{formatBytes(fileSize)}</span>
+              <span>•</span>
+              <span className="uppercase font-mono text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold">
+                {previewKind}
               </span>
               {hasMultipleFiles && (
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700/60 shrink-0">
-                  {activeIndex + 1} of {totalFiles}
-                </span>
+                <>
+                  <span>•</span>
+                  <span>
+                    {activeIndex + 1} of {totalFiles}
+                  </span>
+                </>
               )}
             </div>
           </div>
         </div>
 
-        {/* Center: Image & Doc Toolbar (Zoom, Rotate, Print) */}
-        <div className="hidden md:flex items-center gap-1 bg-slate-100 dark:bg-slate-800/60 rounded-xl p-1 border border-slate-200 dark:border-slate-700/50">
+        {/* Center: Contextual Toolbars */}
+        <div className="hidden md:flex items-center gap-2">
+          {/* Zoom controls for Image */}
           {previewKind === 'image' && (
-            <>
-              <Tooltip title="Zoom Out (-)">
-                <IconButton
-                  size="small"
-                  onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}
-                  disabled={zoom <= 0.25}
-                  sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}
-                >
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-0.5 border border-slate-200 dark:border-slate-700">
+              <Tooltip title="Zoom out (-)">
+                <IconButton size="small" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
                   <ZoomOutIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-
-              <span className="text-xs font-mono px-1.5 text-slate-700 dark:text-slate-300 min-w-[48px] text-center">
+              <span className="text-xs font-mono font-medium px-2 text-slate-700 dark:text-slate-300">
                 {Math.round(zoom * 100)}%
               </span>
-
-              <Tooltip title="Zoom In (+)">
-                <IconButton
-                  size="small"
-                  onClick={() => setZoom((z) => Math.min(5, z + 0.25))}
-                  disabled={zoom >= 5}
-                  sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}
-                >
+              <Tooltip title="Zoom in (+)">
+                <IconButton size="small" onClick={() => setZoom((z) => Math.min(5, z + 0.25))}>
                   <ZoomInIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-
-              <Tooltip title="Reset Zoom (0)">
+              <Tooltip title="Reset (0)">
                 <IconButton
                   size="small"
                   onClick={() => {
@@ -754,51 +828,69 @@ export default function FilePreview({
                     setRotation(0);
                     setPanOffset({ x: 0, y: 0 });
                   }}
-                  sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}
                 >
                   <RestartAltIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-
               <Tooltip title="Rotate 90°">
-                <IconButton
-                  size="small"
-                  onClick={() => setRotation((r) => (r + 90) % 360)}
-                  sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}
-                >
+                <IconButton size="small" onClick={() => setRotation((r) => (r + 90) % 360)}>
                   <RotateRightIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-            </>
+            </div>
           )}
 
+          {/* Text/Code Wrap & Copy Toggle */}
           {(previewKind === 'code' || previewKind === 'markdown') && (
             <>
-              <Tooltip title={wrapText ? 'Disable Word Wrap' : 'Enable Word Wrap'}>
+              <Tooltip title={wrapText ? 'Disable line wrap' : 'Enable line wrap'}>
                 <IconButton
                   size="small"
                   onClick={() => setWrapText((w) => !w)}
-                  sx={{ color: wrapText ? '#38bdf8' : (isDarkMode ? '#94a3b8' : '#64748b') }}
+                  sx={{
+                    color: wrapText ? '#6366f1' : isDarkMode ? '#cbd5e1' : '#475569',
+                    bgcolor: wrapText ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
+                  }}
                 >
                   <WrapTextIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={copiedCode ? 'Copied!' : 'Copy Code'}>
-                <IconButton size="small" onClick={handleCopyCode} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
-                  {copiedCode ? <CheckIcon fontSize="small" sx={{ color: '#4ade80' }} /> : <ContentCopyIcon fontSize="small" />}
+
+              <Tooltip title={copiedCode ? 'Copied!' : 'Copy text'}>
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    if (textContent) {
+                      navigator.clipboard.writeText(textContent);
+                      setCopiedCode(true);
+                      setTimeout(() => setCopiedCode(false), 2000);
+                    }
+                  }}
+                  sx={{ color: copiedCode ? '#10b981' : isDarkMode ? '#cbd5e1' : '#475569' }}
+                >
+                  {copiedCode ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
                 </IconButton>
               </Tooltip>
+
               {previewKind === 'markdown' && (
-                <div className="flex rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs ml-1">
+                <div className="flex bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700 text-xs">
                   <button
                     onClick={() => setActiveTab('preview')}
-                    className={`px-2 py-0.5 transition-colors ${activeTab === 'preview' ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      activeTab === 'preview'
+                        ? 'bg-indigo-600 text-white font-semibold shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
                   >
                     Preview
                   </button>
                   <button
                     onClick={() => setActiveTab('raw')}
-                    className={`px-2 py-0.5 transition-colors ${activeTab === 'raw' ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      activeTab === 'raw'
+                        ? 'bg-indigo-600 text-white font-semibold shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
                   >
                     Raw
                   </button>
@@ -807,21 +899,23 @@ export default function FilePreview({
             </>
           )}
 
-          {previewKind === 'csv' && (
-            <div className="flex items-center gap-1.5 px-2">
+          {/* Excel Search / Filter */}
+          {previewKind === 'xlsx' && (
+            <div className="flex items-center gap-1.5 px-2 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 py-0.5">
               <SearchIcon fontSize="small" sx={{ color: isDarkMode ? '#94a3b8' : '#64748b' }} />
               <input
                 type="text"
-                placeholder="Filter table..."
-                value={csvSearch}
-                onChange={(e) => setCsvSearch(e.target.value)}
-                className="bg-white dark:bg-slate-900/80 text-xs text-slate-800 dark:text-slate-200 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 focus:outline-none focus:border-indigo-500 w-28 lg:w-44"
+                placeholder="Search spreadsheet cells..."
+                value={xlsxSearch}
+                onChange={(e) => setXlsxSearch(e.target.value)}
+                className="bg-transparent text-xs text-slate-800 dark:text-slate-200 px-1 py-0.5 focus:outline-none w-36 lg:w-56"
               />
             </div>
           )}
 
-          {(previewKind === 'pdf' || previewKind === 'image' || previewKind === 'code') && (
-            <Tooltip title="Print">
+          {/* Print button */}
+          {(previewKind === 'pdf' || previewKind === 'image' || previewKind === 'code' || previewKind === 'gdoc') && (
+            <Tooltip title="Print Document">
               <IconButton size="small" onClick={handlePrint} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
                 <PrintIcon fontSize="small" />
               </IconButton>
@@ -829,18 +923,20 @@ export default function FilePreview({
           )}
         </div>
 
-        {/* Right: Open With Menu, Download, Info Drawer, More & Close */}
-        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-          {/* Open with Dropdown */}
-          <button
-            onClick={(e) => setMenuAnchorEl(e.currentTarget)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold border border-slate-200 dark:border-slate-700 transition-colors"
-          >
-            <span>Open with</span>
-            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
+        {/* Right: Google Suite Primary Button + Actions */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Primary "Open in Google Suite" Action Button */}
+          {googleAppInfo && (
+            <a
+              href={googleAppInfo.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-xs transition-all hover:scale-105 active:scale-95 ${googleAppInfo.color}`}
+            >
+              <span>{googleAppInfo.name}</span>
+              <OpenInNewIcon sx={{ fontSize: 14 }} />
+            </a>
+          )}
 
           {/* Download Action */}
           <a
@@ -852,37 +948,22 @@ export default function FilePreview({
             <DownloadIcon fontSize="small" />
           </a>
 
-          {/* File Info Details Panel Toggle */}
+          {/* Info Details Toggle */}
           <Tooltip title="File details (i)">
             <IconButton
               size="small"
               onClick={() => setShowInfo((s) => !s)}
               sx={{
-                color: showInfo ? '#38bdf8' : (isDarkMode ? '#94a3b8' : '#64748b'),
+                color: showInfo ? '#38bdf8' : isDarkMode ? '#94a3b8' : '#64748b',
                 bgcolor: showInfo ? (isDarkMode ? 'rgba(56, 189, 248, 0.1)' : 'rgba(56, 189, 248, 0.12)') : 'transparent',
-                '&:hover': {
-                  color: isDarkMode ? '#ffffff' : '#0f172a',
-                  bgcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-                },
               }}
             >
               <InfoOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
 
-          {/* Close Window */}
-          <IconButton
-            size="small"
-            onClick={onClose}
-            title="Close"
-            sx={{
-              color: isDarkMode ? '#94a3b8' : '#64748b',
-              '&:hover': {
-                color: isDarkMode ? '#ffffff' : '#0f172a',
-                bgcolor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-              },
-            }}
-          >
+          {/* Close Button */}
+          <IconButton size="small" onClick={onClose} title="Close">
             <CloseIcon fontSize="small" />
           </IconButton>
         </div>
@@ -892,14 +973,14 @@ export default function FilePreview({
       {/* MAIN PREVIEW STAGE + SLIDING DETAILS DRAWER                              */}
       {/* ========================================================================= */}
       <div className="relative flex-1 flex overflow-hidden bg-slate-100 dark:bg-slate-950">
-        {/* Navigation Chevrons (Floating left & right) */}
+        {/* Navigation Chevrons */}
         {hasMultipleFiles && (
           <>
             <button
               onClick={handlePrev}
               title="Previous file (←)"
               aria-label="Previous file"
-              className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 dark:shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+              className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
             >
               <NavigateBeforeIcon fontSize="medium" />
             </button>
@@ -908,7 +989,7 @@ export default function FilePreview({
               onClick={handleNext}
               title="Next file (→)"
               aria-label="Next file"
-              className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 dark:shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+              className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
               style={{ right: showInfo ? '340px' : '16px' }}
             >
               <NavigateNextIcon fontSize="medium" />
@@ -918,7 +999,7 @@ export default function FilePreview({
 
         {/* Central Viewport Content Area */}
         <main
-          className="flex-1 relative flex items-center justify-center overflow-hidden p-2 sm:p-6"
+          className="flex-1 relative flex items-center justify-center overflow-hidden p-2 sm:p-4"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -927,7 +1008,11 @@ export default function FilePreview({
           {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100/70 dark:bg-slate-950/60 backdrop-blur-xs z-10">
               <CircularProgress size={44} sx={{ color: '#6366f1' }} />
-              <p className="mt-3 text-xs text-slate-600 dark:text-slate-400 font-medium">Loading preview...</p>
+              <p className="mt-3 text-xs text-slate-600 dark:text-slate-400 font-medium">
+                {previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide'
+                  ? 'Converting document via Google Suite...'
+                  : 'Loading preview...'}
+              </p>
             </div>
           )}
 
@@ -940,7 +1025,7 @@ export default function FilePreview({
                 referrerPolicy="no-referrer"
                 draggable={false}
                 onError={(e) => {
-                  if (thumbnailLink && (e.currentTarget.src !== thumbnailLink.replace(/=s\d+/, '=s1600'))) {
+                  if (thumbnailLink && e.currentTarget.src !== thumbnailLink.replace(/=s\d+/, '=s1600')) {
                     e.currentTarget.src = thumbnailLink.replace(/=s\d+/, '=s1600');
                   }
                 }}
@@ -950,163 +1035,231 @@ export default function FilePreview({
                   maxWidth: '90%',
                   maxHeight: '90%',
                   objectFit: 'contain',
-                  boxShadow: isDarkMode ? '0 25px 50px -12px rgba(0, 0, 0, 0.5)' : '0 20px 40px -10px rgba(0, 0, 0, 0.15)',
                 }}
-                className="rounded-lg select-none"
+                className="select-none rounded-xl shadow-2xl"
               />
             </div>
           )}
 
-          {/* ======================= VIDEO PLAYER ======================= */}
-          {previewKind === 'video' && (
-            <div
-              ref={videoContainerRef}
-              className="relative w-full max-w-5xl aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-end group border border-slate-200 dark:border-slate-800"
-            >
-              <video
-                ref={videoRef}
-                src={fileUrl}
-                className="w-full h-full object-contain cursor-pointer"
-                onClick={togglePlayVideo}
-                onTimeUpdate={() => {
-                  if (videoRef.current) {
-                    setCurrentTime(videoRef.current.currentTime);
-                    setDuration(videoRef.current.duration || 0);
-                  }
-                }}
-                onEnded={() => setIsPlaying(false)}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-              />
-
-              {/* Big Center Play Button Overlay on Pause */}
-              {!isPlaying && (
-                <button
-                  onClick={togglePlayVideo}
-                  aria-label="Play video"
-                  className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white shadow-2xl flex items-center justify-center backdrop-blur-sm transition-transform hover:scale-110"
+          {/* ======================= GOOGLE DOCS / SHEETS / SLIDES & PDF VIEWER ======================= */}
+          {(previewKind === 'pdf' || previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide') && (
+            <div className="w-full h-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
+              {pdfError ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                  <PictureAsPdfIcon sx={{ fontSize: 56, color: '#ef4444', mb: 2 }} />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1">
+                    Unable to generate in-app PDF preview
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mb-6">{pdfError}</p>
+                  {googleAppInfo && (
+                    <a
+                      href={googleAppInfo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg flex items-center gap-2"
+                    >
+                      <span>Open in {googleAppInfo.name}</span>
+                      <OpenInNewIcon fontSize="small" />
+                    </a>
+                  )}
+                </div>
+              ) : pdfBlobUrl ? (
+                <object
+                  data={pdfBlobUrl}
+                  type="application/pdf"
+                  className="w-full h-full border-none rounded-2xl"
+                  title={fileName}
                 >
-                  <PlayArrowIcon sx={{ fontSize: 36 }} />
-                </button>
-              )}
+                  <iframe
+                    src={pdfBlobUrl}
+                    title={fileName}
+                    className="w-full h-full border-none rounded-2xl"
+                  />
+                </object>
+              ) : null}
+            </div>
+          )}
 
-              {/* Video Bottom Custom Controls Bar */}
-              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-4 flex flex-col gap-2 transition-opacity duration-300 opacity-90 group-hover:opacity-100">
-                {/* Progress Scrubber Slider */}
-                <Slider
-                  size="small"
-                  value={currentTime}
-                  min={0}
-                  max={duration || 100}
-                  onChange={handleVideoSeek}
-                  sx={{
-                    color: '#6366f1',
-                    height: 4,
-                    p: 0,
-                    '& .MuiSlider-thumb': {
-                      width: 12,
-                      height: 12,
-                      '&:hover, &.Mui-focusVisible': {
-                        boxShadow: '0 0 0 8px rgba(99, 102, 241, 0.16)',
-                      },
-                    },
-                  }}
+          {/* ======================= WORD (.DOCX) NATIVE VIEWER ======================= */}
+          {previewKind === 'docx' && (
+            <div className="w-full h-full max-w-5xl bg-slate-200 dark:bg-slate-950 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-y-auto p-4 sm:p-8 flex justify-center">
+              {docxError ? (
+                <div className="my-auto text-center p-8">
+                  <DescriptionIcon sx={{ fontSize: 56, color: '#3b82f6', mb: 2 }} />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1">
+                    Unable to preview Word document
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">{docxError}</p>
+                  {googleAppInfo && (
+                    <a
+                      href={googleAppInfo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg inline-flex items-center gap-2"
+                    >
+                      <span>Open in Google Docs</span>
+                      <OpenInNewIcon fontSize="small" />
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div
+                  ref={docxContainerRef}
+                  className="w-full max-w-3xl bg-white text-slate-900 shadow-xl rounded-sm p-8 sm:p-12 min-h-full font-serif leading-relaxed"
+                  style={{ minHeight: '1000px' }}
                 />
+              )}
+            </div>
+          )}
 
-                <div className="flex items-center justify-between text-xs text-slate-200">
-                  <div className="flex items-center gap-3">
-                    <IconButton size="small" onClick={togglePlayVideo} sx={{ color: '#ffffff' }}>
-                      {isPlaying ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
-                    </IconButton>
-
-                    <div className="flex items-center gap-1.5 group/vol">
-                      <IconButton size="small" onClick={toggleVideoMute} sx={{ color: '#cbd5e1' }}>
-                        {isMuted || volume === 0 ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
-                      </IconButton>
-                      <Box sx={{ width: 64, display: 'inline-block' }}>
-                        <Slider
-                          size="small"
-                          value={isMuted ? 0 : volume * 100}
-                          onChange={handleVideoVolume}
-                          sx={{ color: '#94a3b8', height: 3 }}
-                        />
-                      </Box>
-                    </div>
-
-                    <span className="font-mono text-slate-400">
-                      {formatTime(currentTime)} / {formatTime(duration)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* Playback speed selector */}
-                    <div className="flex items-center gap-1 bg-slate-800/80 rounded px-1.5 py-0.5 border border-slate-700">
-                      {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+          {/* ======================= EXCEL (.XLSX / .XLS) SPREADSHEET VIEWER ======================= */}
+          {previewKind === 'xlsx' && (
+            <div className="w-full h-full max-w-6xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col overflow-hidden">
+              {xlsxError ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                  <TableChartIcon sx={{ fontSize: 56, color: '#10b981', mb: 2 }} />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1">
+                    Unable to parse spreadsheet
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">{xlsxError}</p>
+                  {googleAppInfo && (
+                    <a
+                      href={googleAppInfo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg inline-flex items-center gap-2"
+                    >
+                      <span>Open in Google Sheets</span>
+                      <OpenInNewIcon fontSize="small" />
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* Top Sheet Tabs Bar */}
+                  {sheetNames.length > 1 && (
+                    <div className="flex items-center gap-1 px-4 py-2 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 overflow-x-auto">
+                      <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-2 uppercase">Sheets:</span>
+                      {sheetNames.map((name, idx) => (
                         <button
-                          key={rate}
-                          onClick={() => handleSpeedChange(rate)}
-                          className={`text-[10px] px-1 rounded ${playbackRate === rate ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+                          key={name}
+                          onClick={() => handleSelectSheet(idx)}
+                          className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
+                            activeSheetIndex === idx
+                              ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
                         >
-                          {rate}x
+                          {name}
                         </button>
                       ))}
                     </div>
+                  )}
 
-                    {document.pictureInPictureEnabled && (
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          if (document.pictureInPictureElement) {
-                            document.exitPictureInPicture();
-                          } else if (videoRef.current) {
-                            videoRef.current.requestPictureInPicture();
-                          }
-                        }}
-                        sx={{ color: '#cbd5e1' }}
-                      >
-                        <PictureInPictureAltIcon fontSize="small" />
-                      </IconButton>
-                    )}
-
-                    <IconButton size="small" onClick={toggleVideoFullscreen} sx={{ color: '#cbd5e1' }}>
-                      {isVideoFullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
-                    </IconButton>
+                  {/* Spreadsheet Grid View */}
+                  <div className="flex-1 overflow-auto">
+                    <table className="w-full text-left text-xs border-collapse font-mono">
+                      <thead className="bg-slate-100 dark:bg-slate-950 sticky top-0 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold z-10">
+                        <tr>
+                          <th className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 w-12 text-center text-slate-400 dark:text-slate-500">
+                            #
+                          </th>
+                          {sheetGrid[0] &&
+                            sheetGrid[0].map((_, colIdx) => (
+                              <th
+                                key={colIdx}
+                                className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 whitespace-nowrap text-center"
+                              >
+                                {String.fromCharCode(65 + (colIdx % 26))}
+                              </th>
+                            ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {sheetGrid
+                          .filter((row) =>
+                            xlsxSearch
+                              ? row.some((cell) => String(cell).toLowerCase().includes(xlsxSearch.toLowerCase()))
+                              : true
+                          )
+                          .map((row, rowIdx) => (
+                            <tr key={rowIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                              <td className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-center select-none font-semibold">
+                                {rowIdx + 1}
+                              </td>
+                              {row.map((cell, colIdx) => (
+                                <td
+                                  key={colIdx}
+                                  className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-nowrap max-w-xs truncate"
+                                  title={String(cell)}
+                                >
+                                  {String(cell)}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* ======================= AUDIO PLAYER ======================= */}
+          {/* ======================= POWERPOINT (.PPTX) VIEWER ======================= */}
+          {previewKind === 'pptx' && (
+            <div className="w-full h-full max-w-5xl rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
+              <iframe
+                src={`https://docs.google.com/presentation/d/${fileId}/preview?rm=minimal&embedded=true`}
+                title={fileName}
+                className="w-full h-full border-none"
+                allow="autoplay; encrypted-media"
+                onLoad={() => setLoading(false)}
+              />
+            </div>
+          )}
+
+          {/* ======================= VIDEO VIEWER ======================= */}
+          {previewKind === 'video' && (
+            <div ref={videoContainerRef} className="relative w-full max-w-5xl rounded-2xl overflow-hidden bg-black shadow-2xl flex items-center justify-center group">
+              <video
+                ref={videoRef}
+                src={fileUrl}
+                playsInline
+                onTimeUpdate={() => {
+                  if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
+                }}
+                onLoadedMetadata={() => {
+                  if (videoRef.current) setDuration(videoRef.current.duration);
+                  setLoading(false);
+                }}
+                className="max-h-[75vh] w-auto mx-auto object-contain cursor-pointer"
+                onClick={togglePlayVideo}
+              />
+            </div>
+          )}
+
+          {/* ======================= AUDIO VIEWER ======================= */}
           {previewKind === 'audio' && (
-            <div className="w-full max-w-lg p-6 sm:p-8 rounded-3xl bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-xl dark:shadow-2xl flex flex-col items-center">
+            <div className="w-full max-w-md bg-white/95 dark:bg-slate-900/90 rounded-3xl border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-2xl p-6 sm:p-8 flex flex-col items-center">
               <audio
                 ref={audioRef}
                 src={fileUrl}
                 onTimeUpdate={() => {
-                  if (audioRef.current) {
-                    setAudioCurrentTime(audioRef.current.currentTime);
-                    setAudioDuration(audioRef.current.duration || 0);
-                  }
+                  if (audioRef.current) setAudioCurrentTime(audioRef.current.currentTime);
                 }}
-                onEnded={() => setIsAudioPlaying(false)}
-                onPlay={() => setIsAudioPlaying(true)}
-                onPause={() => setIsAudioPlaying(false)}
+                onLoadedMetadata={() => {
+                  if (audioRef.current) setAudioDuration(audioRef.current.duration);
+                  setLoading(false);
+                }}
               />
-
-              {/* Animated Wave / Disc Graphic */}
-              <div className="relative w-36 h-36 rounded-full bg-gradient-to-tr from-amber-600 to-indigo-600 flex items-center justify-center shadow-xl mb-6">
-                <div className={`w-32 h-32 rounded-full bg-slate-50 dark:bg-slate-950 flex items-center justify-center border-4 border-slate-200 dark:border-slate-800 ${isAudioPlaying ? 'animate-spin-slow' : ''}`}>
-                  <AudioFileIcon sx={{ fontSize: 48, color: '#f59e0b' }} />
-                </div>
+              <div className="w-24 h-24 rounded-3xl bg-amber-500/10 flex items-center justify-center mb-6 border border-amber-500/20 shadow-inner">
+                <AudioFileIcon sx={{ fontSize: 52, color: '#f59e0b' }} />
               </div>
-
               <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 text-center truncate max-w-full px-2" title={fileName}>
                 {fileName}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{formatBytes(fileSize)}</p>
-
-              {/* Audio Scrubber */}
               <div className="w-full mt-6">
                 <Slider
                   size="small"
@@ -1121,23 +1274,10 @@ export default function FilePreview({
                   <span>{formatTime(audioDuration)}</span>
                 </div>
               </div>
-
-              {/* Audio Controls */}
               <div className="flex items-center justify-between w-full mt-4">
-                <div className="flex items-center gap-2">
-                  <IconButton size="small" onClick={toggleAudioMute} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
-                    {isAudioMuted || audioVolume === 0 ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
-                  </IconButton>
-                  <Box sx={{ width: 60 }}>
-                    <Slider
-                      size="small"
-                      value={isAudioMuted ? 0 : audioVolume * 100}
-                      onChange={handleAudioVolume}
-                      sx={{ color: '#f59e0b', height: 3 }}
-                    />
-                  </Box>
-                </div>
-
+                <IconButton size="small" onClick={toggleAudioMute} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
+                  {isAudioMuted || audioVolume === 0 ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
+                </IconButton>
                 <button
                   onClick={togglePlayAudio}
                   aria-label="Play audio"
@@ -1145,23 +1285,20 @@ export default function FilePreview({
                 >
                   {isAudioPlaying ? <PauseIcon sx={{ fontSize: 32 }} /> : <PlayArrowIcon sx={{ fontSize: 32 }} />}
                 </button>
-
-                <div className="w-20 flex justify-end">
-                  <a
-                    href={fileUrl}
-                    download={fileName}
-                    className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition-colors"
-                  >
-                    <DownloadIcon fontSize="small" />
-                  </a>
-                </div>
+                <a
+                  href={fileUrl}
+                  download={fileName}
+                  className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                >
+                  <DownloadIcon fontSize="small" />
+                </a>
               </div>
             </div>
           )}
 
           {/* ======================= CODE / TEXT VIEWER ======================= */}
           {(previewKind === 'code' || (previewKind === 'markdown' && activeTab === 'raw')) && (
-            <div className="w-full h-full max-w-5xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-xl dark:shadow-2xl flex flex-col overflow-hidden">
+            <div className="w-full h-full max-w-5xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
               {textError ? (
                 <div className="p-8 text-center text-rose-500 dark:text-rose-400 text-sm">{textError}</div>
               ) : textContent !== null ? (
@@ -1187,7 +1324,7 @@ export default function FilePreview({
 
           {/* ======================= MARKDOWN PREVIEW ======================= */}
           {previewKind === 'markdown' && activeTab === 'preview' && (
-            <div className="w-full h-full max-w-4xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-xl dark:shadow-2xl p-6 sm:p-10 overflow-auto prose dark:prose-invert max-w-none text-slate-800 dark:text-slate-200 text-sm leading-relaxed">
+            <div className="w-full h-full max-w-4xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-2xl p-6 sm:p-10 overflow-auto prose dark:prose-invert max-w-none text-slate-800 dark:text-slate-200 text-sm leading-relaxed">
               {textContent ? (
                 <div className="space-y-4">
                   {textContent.split('\n\n').map((block, i) => {
@@ -1220,79 +1357,40 @@ export default function FilePreview({
                     return <p key={i} className="text-slate-700 dark:text-slate-300">{block}</p>;
                   })}
                 </div>
-              ) : (
-                <p className="text-slate-500 dark:text-slate-400">Loading markdown preview...</p>
-              )}
+              ) : null}
             </div>
           )}
 
           {/* ======================= CSV / TSV VIEWER ======================= */}
           {previewKind === 'csv' && (
-            <div className="w-full h-full max-w-6xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-xl dark:shadow-2xl flex flex-col overflow-hidden">
-              <div className="px-4 py-2 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-                <span>{parsedCsvRows.rows.length} rows • {parsedCsvRows.headers.length} columns</span>
-                {csvSearch && <span>Filtered by "{csvSearch}"</span>}
-              </div>
+            <div className="w-full h-full max-w-6xl bg-white dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden">
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-left text-xs border-collapse font-mono">
-                  <thead className="bg-slate-100 dark:bg-slate-950/90 sticky top-0 border-b border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-300 font-semibold z-10">
-                    <tr>
-                      <th className="px-3 py-2 border-r border-slate-200 dark:border-slate-800 w-10 text-slate-400 dark:text-slate-500">#</th>
-                      {parsedCsvRows.headers.map((h, i) => (
-                        <th key={i} className="px-4 py-2 border-r border-slate-200 dark:border-slate-800 whitespace-nowrap">
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
-                    {parsedCsvRows.rows.map((row, rowIdx) => (
-                      <tr key={rowIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                        <td className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-right select-none">
-                          {rowIdx + 1}
-                        </td>
-                        {row.map((cell, colIdx) => (
-                          <td key={colIdx} className="px-4 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                            {cell}
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {textContent
+                      ?.split('\n')
+                      .filter((line) => line.trim().length > 0)
+                      .map((row, rowIdx) => (
+                        <tr key={rowIdx} className={rowIdx === 0 ? 'bg-slate-100 dark:bg-slate-950 font-bold' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'}>
+                          <td className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 text-slate-400 text-center w-12 select-none">
+                            {rowIdx + 1}
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {row.split(',').map((cell, colIdx) => (
+                            <td key={colIdx} className="px-3 py-1.5 border-r border-slate-200 dark:border-slate-800 whitespace-nowrap">
+                              {cell.replace(/^["']|["']$/g, '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* ======================= PDF VIEWER ======================= */}
-          {previewKind === 'pdf' && (
-            <div className="w-full h-full max-w-5xl rounded-2xl overflow-hidden shadow-xl dark:shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-              <iframe
-                src={`https://drive.google.com/file/d/${fileId}/preview?rm=minimal&embedded=true`}
-                title={fileName}
-                className="w-full h-full border-none"
-                allow="autoplay; encrypted-media"
-                onLoad={() => setLoading(false)}
-              />
-            </div>
-          )}
-
-          {/* ======================= GOOGLE DOCS / SHEETS / SLIDES / OFFICE ======================= */}
-          {(previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide' || previewKind === 'office') && (
-            <div className="w-full h-full max-w-5xl rounded-2xl overflow-hidden shadow-xl dark:shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-              <iframe
-                src={`https://drive.google.com/file/d/${fileId}/preview?rm=minimal&embedded=true`}
-                title={fileName}
-                className="w-full h-full border-none"
-                allow="autoplay; encrypted-media"
-                onLoad={() => setLoading(false)}
-              />
-            </div>
-          )}
-
           {/* ======================= UNSUPPORTED / BINARY FALLBACK ======================= */}
-          {previewKind === 'unsupported' && (
-            <div className="p-8 sm:p-12 rounded-3xl bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-xl dark:shadow-2xl text-center max-w-md flex flex-col items-center">
+          {(previewKind === 'unsupported' || previewKind === 'office') && (
+            <div className="p-8 sm:p-12 rounded-3xl bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-2xl text-center max-w-md flex flex-col items-center">
               <div className="w-20 h-20 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-5 border border-indigo-500/20">
                 <InsertDriveFileIcon sx={{ fontSize: 44 }} />
               </div>
@@ -1334,7 +1432,7 @@ export default function FilePreview({
         {/* RIGHT SIDE DETAILS / INFO DRAWER                                         */}
         {/* ========================================================================= */}
         {showInfo && (
-          <aside className="w-80 shrink-0 bg-white/95 dark:bg-slate-900/95 border-l border-slate-200 dark:border-slate-800 p-5 overflow-y-auto z-20 backdrop-blur-xl shadow-xl dark:shadow-2xl flex flex-col justify-between">
+          <aside className="w-80 shrink-0 bg-white/95 dark:bg-slate-900/95 border-l border-slate-200 dark:border-slate-800 p-5 overflow-y-auto z-20 backdrop-blur-xl shadow-2xl flex flex-col justify-between">
             <div className="space-y-6">
               <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
                 <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">File Details</h4>
@@ -1343,7 +1441,6 @@ export default function FilePreview({
                 </IconButton>
               </div>
 
-              {/* Thumbnail / Icon Badge */}
               <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
                 <div className="w-10 h-10 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0">
                   {getTypeIcon(previewKind)}
@@ -1358,7 +1455,6 @@ export default function FilePreview({
                 </div>
               </div>
 
-              {/* Properties List */}
               <div className="space-y-3 text-xs">
                 <div>
                   <span className="text-slate-500 dark:text-slate-400 font-medium block mb-0.5">Type</span>
@@ -1398,67 +1494,37 @@ export default function FilePreview({
                           {owners[0].displayName?.charAt(0) || 'U'}
                         </div>
                       )}
-                      <span className="text-slate-700 dark:text-slate-300 truncate">
-                        {owners[0].displayName || owners[0].emailAddress}
-                      </span>
+                      <span className="text-slate-800 dark:text-slate-200 truncate">{owners[0].displayName || owners[0].emailAddress}</span>
                     </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Bottom Link Copy Action */}
-            <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+            <div className="pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
               <button
                 onClick={handleCopyLink}
-                className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold border border-slate-200 dark:border-slate-700 transition-colors flex items-center justify-center gap-1.5"
+                className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
               >
-                {copiedLink ? <CheckIcon fontSize="small" sx={{ color: '#4ade80' }} /> : <ContentCopyIcon fontSize="small" />}
-                <span>{copiedLink ? 'Link Copied!' : 'Copy File Link'}</span>
+                {copiedLink ? <CheckIcon fontSize="small" sx={{ color: '#10b981' }} /> : <ContentCopyIcon fontSize="small" />}
+                <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
               </button>
+
+              {webViewLink && (
+                <a
+                  href={webViewLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <OpenInNewIcon fontSize="small" />
+                  <span>Open in Google Drive</span>
+                </a>
+              )}
             </div>
           </aside>
         )}
       </div>
-
-      {/* ========================================================================= */}
-      {/* OPEN WITH CONTEXT MENU                                                    */}
-      {/* ========================================================================= */}
-      <Menu
-        anchorEl={menuAnchorEl}
-        open={Boolean(menuAnchorEl)}
-        onClose={() => setMenuAnchorEl(null)}
-        PaperProps={{
-          sx: {
-            bgcolor: isDarkMode ? '#1e293b' : '#ffffff',
-            color: isDarkMode ? '#f8fafc' : '#0f172a',
-            border: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
-            borderRadius: '12px',
-            boxShadow: isDarkMode ? '0 20px 25px -5px rgba(0, 0, 0, 0.5)' : '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-          },
-        }}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        {googleApps.map((app) => (
-          <MenuItem
-            key={app.url}
-            onClick={() => {
-              window.open(app.url, '_blank');
-              setMenuAnchorEl(null);
-            }}
-            sx={{
-              fontSize: '13px',
-              py: 1,
-              px: 2,
-              '&:hover': { bgcolor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' },
-            }}
-          >
-            <OpenInNewIcon fontSize="small" sx={{ mr: 1.5, color: isDarkMode ? '#94a3b8' : '#64748b' }} />
-            {app.name}
-          </MenuItem>
-        ))}
-      </Menu>
-    </Dialog>
+    </div>
   );
 }

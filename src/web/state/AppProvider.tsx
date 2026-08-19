@@ -2,8 +2,9 @@ import React, { createContext, useContext, useState, useEffect, useCallback, Rea
 import { AccountView, PreferencesView } from '../../shared/contracts';
 import { apiRequest, setCsrfToken } from '../api/client';
 import { rememberAccount, forgetRememberedAccount } from '../auth/rememberedAccounts';
+import { AppTab, LOGIN_PATH, pathForTab, tabForPath } from './tabRoute';
 
-export type AppTab = 'uploader' | 'drive' | 'settings';
+export type { AppTab } from './tabRoute';
 export type ThemeMode = 'system' | 'light' | 'dark';
 
 interface AppContextType {
@@ -28,7 +29,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AccountView | null>(null);
   const [preferences, setPreferences] = useState<PreferencesView | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<AppTab>('uploader');
+  const [activeTab, setActiveTabState] = useState<AppTab>(() =>
+    typeof window === 'undefined' ? 'uploader' : tabForPath(window.location.pathname)
+  );
   const [theme, setThemeState] = useState<ThemeMode>(() => {
     if (typeof localStorage !== 'undefined') {
       const saved = localStorage.getItem('gdu_theme') as ThemeMode | null;
@@ -37,6 +40,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return 'system';
   });
   const [error, setError] = useState<string | null>(null);
+
+  // Tabs are real history entries, so Back returns to the previously viewed tab.
+  // Only the path is passed to pushState, which also drops any stale query string
+  // (e.g. the ?auth=success the OAuth callback leaves behind).
+  const setActiveTab = useCallback((tab: AppTab) => {
+    setActiveTabState(tab);
+    if (typeof window === 'undefined') return;
+    const target = pathForTab(tab);
+    if (window.location.pathname !== target) {
+      window.history.pushState({ tab }, '', target);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Deliberately setActiveTabState, not setActiveTab: reacting to Back/Forward
+    // must not push a new entry of its own.
+    const handlePopState = () => setActiveTabState(tabForPath(window.location.pathname));
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const applyTheme = useCallback((mode: ThemeMode) => {
     if (typeof document === 'undefined') return;
@@ -134,6 +157,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('pageshow', handlePageShow);
     };
   }, [refreshSession]);
+
+  // Keep the URL honest about what is on screen, once the session is known.
+  // Covers: stripping the ?auth=success the OAuth callback leaves behind,
+  // canonicalising "/" to /uploads, and dropping to /login on sign-out or session
+  // expiry. replaceState, not pushState — none of these are navigations the user
+  // should have to press Back through.
+  //
+  // The signed-in target comes from `activeTab`, not from the path, because
+  // activeTab is what is actually rendered. On first mount the two agree (state is
+  // seeded from the path, so deep links survive), but they can diverge if a session
+  // is restored without a page load — the sign-out rewrite below has moved the path
+  // to /login by then, and reading it back would strand the user on /uploads while
+  // a different tab is on screen.
+  useEffect(() => {
+    if (isLoading || typeof window === 'undefined') return;
+    const target = user ? pathForTab(activeTab) : LOGIN_PATH;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.replaceState({}, '', target);
+    }
+  }, [isLoading, user, activeTab]);
 
   const updatePreferences = useCallback(
     async (patch: Partial<PreferencesView>) => {

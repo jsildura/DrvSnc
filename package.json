@@ -25,11 +25,13 @@
     "@mui/icons-material": "^5.15.10",
     "@mui/material": "^5.15.10",
     "aws4fetch": "^1.0.20",
+    "docx-preview": "^0.4.0",
     "hono": "^4.13.2",
     "jszip": "^3.10.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-window": "^1.8.10",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

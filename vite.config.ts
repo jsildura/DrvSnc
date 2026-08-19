@@ -10,7 +10,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8787',
+      // Target 127.0.0.1, not localhost: wrangler dev binds workerd to IPv4 only
+      // (--socket-addr=entry=127.0.0.1:8787), while Node resolves "localhost" to
+      // ::1 first. Going through "localhost" leaves every /api call depending on
+      // an IPv6 -> IPv4 fallback that adds latency and intermittently 502s.
+      '/api': 'http://127.0.0.1:8787',
     },
   },
 });

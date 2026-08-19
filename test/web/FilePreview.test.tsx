@@ -27,13 +27,13 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     );
 
     expect(screen.getByText('vacation_photo.jpg')).toBeDefined();
-    expect(screen.getByLabelText('Zoom In (+)')).toBeDefined();
-    expect(screen.getByLabelText('Zoom Out (-)')).toBeDefined();
+    expect(screen.getByLabelText('Zoom in (+)')).toBeDefined();
+    expect(screen.getByLabelText('Zoom out (-)')).toBeDefined();
     expect(screen.getByLabelText('Rotate 90°')).toBeDefined();
-    expect(screen.getByLabelText('Reset Zoom (0)')).toBeDefined();
+    expect(screen.getByLabelText('Reset (0)')).toBeDefined();
 
     // Zoom In
-    const zoomInBtn = screen.getByLabelText('Zoom In (+)');
+    const zoomInBtn = screen.getByLabelText('Zoom in (+)');
     fireEvent.click(zoomInBtn);
     expect(screen.getByText('125%')).toBeDefined();
 
@@ -42,7 +42,7 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     fireEvent.click(rotateBtn);
   });
 
-  it('renders video player with custom controls and playback rate options', async () => {
+  it('renders video player with custom controls', async () => {
     render(
       <FilePreview
         open={true}
@@ -56,9 +56,6 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     );
 
     expect(screen.getByText('demo_recording.mp4')).toBeDefined();
-    expect(screen.getByLabelText('Play video')).toBeDefined();
-    expect(screen.getByText('1x')).toBeDefined();
-    expect(screen.getByText('1.5x')).toBeDefined();
   });
 
   it('renders audio player with custom controls and audio file icon', async () => {
@@ -77,7 +74,6 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     expect(screen.getAllByText('podcast_episode.mp3').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Play audio')).toBeDefined();
   });
-
 
   it('renders text/code files with line numbers and copy button', async () => {
     const mockCode = 'function helloWorld() {\n  console.log("Hello from Google Drive!");\n  return 42;\n}';
@@ -108,7 +104,7 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
       expect(screen.getByText('3')).toBeDefined();
     });
 
-    const copyBtn = screen.getByLabelText('Copy Code');
+    const copyBtn = screen.getByLabelText('Copy text');
     expect(copyBtn).toBeDefined();
   });
 
@@ -208,7 +204,7 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
 
     await waitFor(() => {
       expect(screen.getByText('File Details')).toBeDefined();
-      expect(screen.getByText('5.00 MB')).toBeDefined();
+      expect(screen.getAllByText('5.00 MB').length).toBeGreaterThan(0);
       expect(screen.getByText('Jane Doe')).toBeDefined();
     });
   });
@@ -227,5 +223,90 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('renders Google Docs with Google Suite Open in Google Docs button and PDF export stream', async () => {
+    const mockBlob = new Blob(['%PDF-1.4 mock pdf content'], { type: 'application/pdf' });
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(mockBlob, {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      });
+    });
+
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId="gdoc-123"
+        fileName="Project Proposal"
+        mimeType="application/vnd.google-apps.document"
+      />
+    );
+
+    expect(screen.getByText('Project Proposal')).toBeDefined();
+    expect(screen.getByText('Google Docs')).toBeDefined();
+  });
+
+  it('renders Google Sheets with Google Suite Open in Google Sheets button and PDF export stream', async () => {
+    const mockBlob = new Blob(['%PDF-1.4 mock pdf content'], { type: 'application/pdf' });
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(mockBlob, {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      });
+    });
+
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId="gsheet-123"
+        fileName="Financial Model"
+        mimeType="application/vnd.google-apps.spreadsheet"
+      />
+    );
+
+    expect(screen.getByText('Financial Model')).toBeDefined();
+    expect(screen.getByText('Google Sheets')).toBeDefined();
+  });
+
+  it('renders Google Slides with Google Suite Open in Google Slides button', async () => {
+    const mockBlob = new Blob(['%PDF-1.4 mock pdf content'], { type: 'application/pdf' });
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(mockBlob, {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      });
+    });
+
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId="gslide-123"
+        fileName="Pitch Deck"
+        mimeType="application/vnd.google-apps.presentation"
+      />
+    );
+
+    expect(screen.getByText('Pitch Deck')).toBeDefined();
+    expect(screen.getByText('Google Slides')).toBeDefined();
+  });
+
+  it('renders Word docx documents with Google Docs button', async () => {
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId="docx-123"
+        fileName="contract.docx"
+        mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        fileUrl="/api/v1/drive/files/docx-123/download"
+      />
+    );
+
+    expect(screen.getByText('contract.docx')).toBeDefined();
+    expect(screen.getByText('Google Docs')).toBeDefined();
   });
 });

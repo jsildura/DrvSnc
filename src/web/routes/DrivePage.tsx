@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DriveItemView, QuotaView } from '../../shared/contracts';
 import {
   listDriveItems,
@@ -18,6 +18,9 @@ import FilePreview from '../../components/FilePreview';
 
 type DriveViewSection = 'files' | 'shared' | 'trash';
 type ViewMode = 'list' | 'grid';
+type Toast = { id: number; message: string; variant: 'success' | 'error' };
+
+const TOAST_DURATION_MS = 4000;
 
 function getFileExtension(name: string): string {
   const parts = name.split('.');
@@ -102,6 +105,60 @@ export function DrivePage() {
   const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
   const [previewItem, setPreviewItem] = useState<DriveItemView | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number>(0);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const toastIdRef = useRef(0);
+  // Ids we removed locally (trashed / restored / deleted). Drive's list API is
+  // eventually consistent, so a reload that happens shortly after a mutation — a
+  // rename or a new folder, say — can still return them. Filter them out until the
+  // view changes, at which point a trashed file legitimately belongs in the listing.
+  const removedIdsRef = useRef<Set<string>>(new Set());
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, variant: Toast['variant'] = 'success') => {
+      const id = ++toastIdRef.current;
+      setToasts((prev) => [...prev, { id, message, variant }]);
+      setTimeout(() => dismissToast(id), TOAST_DURATION_MS);
+    },
+    [dismissToast]
+  );
+
+  const reportMutationError = useCallback(
+    (err: unknown, fallback: string) => {
+      const message = (err as Error)?.message || fallback;
+      showToast(message, 'error');
+      // Keep the inline banner for auth failures so "Reconnect Google Drive" stays reachable.
+      if (/auth|google|token/i.test(message)) setError(message);
+    },
+    [showToast]
+  );
+
+  // Drop an item from the visible list right away and remember it, so an
+  // eventually-consistent reload can't resurrect it. Call this *before* awaiting
+  // the mutation: the round-trip through the worker to Drive takes seconds, and
+  // waiting for it leaves the row sitting there looking unresponsive.
+  // Returns a rollback that puts the row back in place if the mutation fails.
+  const forgetItem = useCallback((id: string, snapshot: DriveItemView[]) => {
+    removedIdsRef.current.add(id);
+    setItems((prev) => prev.filter((i) => i.id !== id));
+
+    const index = snapshot.findIndex((i) => i.id === id);
+    const item = index >= 0 ? snapshot[index] : null;
+
+    return () => {
+      removedIdsRef.current.delete(id);
+      if (!item) return;
+      setItems((prev) =>
+        prev.some((i) => i.id === id)
+          ? prev
+          : [...prev.slice(0, index), item, ...prev.slice(index)]
+      );
+    };
+  }, []);
 
   // Debounce search query by 300ms
   useEffect(() => {
@@ -152,12 +209,20 @@ export function DrivePage() {
         });
       }
 
-      setItems(res.items);
+      const removed = removedIdsRef.current;
+      setItems(removed.size > 0 ? res.items.filter((i) => !removed.has(i.id)) : res.items);
     } catch (err) {
       setError((err as Error).message || 'Failed to load Drive items');
     } finally {
       setIsLoading(false);
     }
+  }, [section, currentFolderId, debouncedSearchQuery]);
+
+  // Forget locally-removed ids whenever the view changes — a trashed file
+  // legitimately belongs in the Trash listing. Declared before the load effect
+  // so it resets first when both fire on the same commit.
+  useEffect(() => {
+    removedIdsRef.current = new Set();
   }, [section, currentFolderId, debouncedSearchQuery]);
 
   useEffect(() => {
@@ -189,63 +254,95 @@ export function DrivePage() {
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
+    const name = newFolderName.trim();
     try {
-      await createFolder(newFolderName.trim(), currentFolderId);
+      await createFolder(name, currentFolderId);
       setNewFolderName('');
       setShowNewFolderModal(false);
+      showToast(`Folder "${name}" created`);
       loadData();
     } catch (err) {
-      setError((err as Error).message || 'Failed to create folder');
+      reportMutationError(err, 'Failed to create folder');
     }
   };
 
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!renamingItem || !renameValue.trim()) return;
+    const name = renameValue.trim();
     try {
-      await renameItem(renamingItem.id, renameValue.trim());
+      await renameItem(renamingItem.id, name);
       setRenamingItem(null);
+      showToast(`Renamed to "${name}"`);
       loadData();
     } catch (err) {
-      setError((err as Error).message || 'Failed to rename item');
+      reportMutationError(err, 'Failed to rename item');
     }
   };
 
+  // No loadData() in the handlers below. The optimistic removal already leaves the
+  // list correct, and re-listing would flip isLoading and swap the whole grid for
+  // the "Loading Drive files..." placeholder — a full-page flash on every click.
+  // Only the storage bar is refreshed, which re-renders nothing else.
+
   const handleTrash = async (id: string) => {
+    const item = items.find((i) => i.id === id);
+    const rollback = forgetItem(id, items);
     try {
       await trashItem(id);
-      loadData();
+      showToast(item ? `"${item.name}" moved to trash` : 'Moved to trash');
+      refreshStorage();
     } catch (err) {
-      setError((err as Error).message || 'Failed to move to trash');
+      rollback();
+      reportMutationError(err, 'Failed to move to trash');
     }
   };
 
   const handleRestore = async (id: string) => {
+    const item = items.find((i) => i.id === id);
+    const rollback = forgetItem(id, items);
     try {
       await restoreItem(id);
-      loadData();
+      showToast(item ? `"${item.name}" restored` : 'Item restored');
+      refreshStorage();
     } catch (err) {
-      setError((err as Error).message || 'Failed to restore item');
+      rollback();
+      reportMutationError(err, 'Failed to restore item');
     }
   };
 
   const handleDeletePermanently = async (id: string) => {
     if (!confirm('Are you sure you want to permanently delete this item?')) return;
+    const item = items.find((i) => i.id === id);
+    const rollback = forgetItem(id, items);
     try {
       await deleteItemPermanently(id);
-      loadData();
+      showToast(item ? `"${item.name}" deleted permanently` : 'Item deleted permanently');
+      refreshStorage();
     } catch (err) {
-      setError((err as Error).message || 'Failed to delete item');
+      rollback();
+      reportMutationError(err, 'Failed to delete item');
     }
   };
 
   const handleEmptyTrash = async () => {
     if (!confirm('Empty all items from Trash? This action cannot be undone.')) return;
+    const snapshot = items;
+    const emptied = snapshot.length;
+
+    // Clear before awaiting: the request round-trip plus Drive's asynchronous
+    // delete would otherwise leave the list looking stuck for seconds.
+    snapshot.forEach((i) => removedIdsRef.current.add(i.id));
+    setItems([]);
+
     try {
       await emptyTrash();
-      loadData();
+      showToast(emptied > 0 ? `Trash emptied (${emptied} item${emptied === 1 ? '' : 's'})` : 'Trash emptied');
+      refreshStorage();
     } catch (err) {
-      setError((err as Error).message || 'Failed to empty trash');
+      snapshot.forEach((i) => removedIdsRef.current.delete(i.id));
+      setItems(snapshot);
+      reportMutationError(err, 'Failed to empty trash');
     }
   };
 
@@ -780,7 +877,8 @@ export function DrivePage() {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-0.5">
+                          {/* The card itself opens the preview, so keep action clicks from bubbling. */}
+                          <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                             {section === 'trash' ? (
                               <>
                                 <button
@@ -933,6 +1031,48 @@ export function DrivePage() {
             }
           }}
         />
+      )}
+
+      {/* Action Toasts */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2 pointer-events-none">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              role="status"
+              aria-live="polite"
+              className={`pointer-events-auto flex items-center gap-2.5 pl-3.5 pr-3 py-2.5 rounded-2xl border shadow-lg backdrop-blur-xl text-xs font-semibold max-w-[min(22rem,calc(100vw-2rem))] ${
+                toast.variant === 'success'
+                  ? 'bg-emerald-50/95 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-900/60 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-50/95 dark:bg-rose-950/80 border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                {toast.variant === 'success' ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                ) : (
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                )}
+              </svg>
+              <span className="min-w-0 break-words">{toast.message}</span>
+              <button
+                type="button"
+                onClick={() => dismissToast(toast.id)}
+                title="Dismiss"
+                aria-label="Dismiss notification"
+                className="shrink-0 p-0.5 rounded-md opacity-60 hover:opacity-100 transition-opacity"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
