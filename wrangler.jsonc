@@ -74,7 +74,7 @@
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "production",
-        "APP_ORIGIN": "https://uploader.streamflix.app"
+        "APP_ORIGIN": "https://drvsnc.database-00.workers.dev"
       },
       "d1_databases": [
         {
