@@ -257,11 +257,15 @@ async function callSeedrApi(
   }
 
   const doRequest = async (token: string) => {
+    // resource.php dispatches on `func`, which it accepts from either the query string
+    // or the form body — both verified against the live API, as is `access_token`.
+    // It does *not* understand `action`: a request carrying only `action` answers
+    // {"result":false,"error":"unknown_func","func":null}, so sending it is pointless.
+    const url = new URL(RESOURCE_URL);
+    url.searchParams.set('func', action);
+    url.searchParams.set('access_token', token);
+
     if (method === 'GET') {
-      const url = new URL(RESOURCE_URL);
-      url.searchParams.set('action', action);
-      url.searchParams.set('func', action);
-      url.searchParams.set('access_token', token);
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
@@ -273,13 +277,11 @@ async function callSeedrApi(
       });
     }
 
-    const body = new URLSearchParams({
-      action,
-      func: action,
-      access_token: token,
-      ...params,
-    });
-    return fetch(RESOURCE_URL, {
+    const body = new URLSearchParams(params);
+    body.set('func', action);
+    body.set('access_token', token);
+
+    return fetch(url.toString(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -308,13 +310,40 @@ async function callSeedrApi(
     }
   }
 
-  if (!res.ok) {
-    throw new Error(`Seedr API request failed (${res.status})`);
+  // Read once as text: Seedr sometimes answers with HTML or a bare string, and a
+  // failed res.json() would hide the reason the request was rejected.
+  const rawBody = await res.text();
+  let json: Record<string, any> = {};
+  if (rawBody) {
+    try {
+      json = JSON.parse(rawBody) as Record<string, any>;
+    } catch {
+      json = {};
+    }
   }
 
-  const json = (await res.json()) as Record<string, any>;
-  if (json.result === false && json.error) {
-    throw new Error(String(json.error || 'Seedr operation failed'));
+  if (!res.ok) {
+    // Seedr reports failures two ways: {"error":"unknown_func"} from the dispatcher
+    // and {"status_code":400,"reason_phrase":"Folder not found"} from the handlers.
+    const detail =
+      json.error ||
+      json.error_description ||
+      json.reason_phrase ||
+      json.reason ||
+      rawBody.trim().slice(0, 200);
+    throw new Error(
+      detail
+        ? `Seedr "${action}" request failed (${res.status}): ${detail}`
+        : `Seedr "${action}" request failed (${res.status})`
+    );
+  }
+
+  if (json.result === false || json.error) {
+    throw new Error(
+      String(
+        json.error || json.reason_phrase || json.reason || `Seedr rejected the "${action}" request`
+      )
+    );
   }
 
   return json;
@@ -343,7 +372,13 @@ export async function getSeedrContents(
   userId: string,
   folderId = '0'
 ): Promise<SeedrContentsResponse> {
-  const data = await callSeedrApi(env, userId, 'list_contents', { folder_id: String(folderId) });
+  // `content_type`/`content_id` are what list_contents actually reads; `folder_id` is
+  // ignored, so passing it alone always returned the root regardless of folderId.
+  const data = await callSeedrApi(env, userId, 'list_contents', {
+    content_type: 'folder',
+    content_id: String(folderId),
+    folder_id: String(folderId),
+  });
   const rawFolders = Array.isArray(data.folders) ? data.folders : [];
   const rawFiles = Array.isArray(data.files) ? data.files : [];
   const rawTorrents = Array.isArray(data.torrents) ? data.torrents : [];
@@ -401,17 +436,29 @@ export async function fetchSeedrFileUrl(
 }
 
 /**
- * 7. Create Archive URL for a completed Seedr folder
+ * 7. Create a time-limited zip URL for a completed Seedr folder
+ *
+ * `fetch_archive` is the live endpoint — verified directly against the API. The
+ * `create_empty_archive` / `create_archive` funcs that seedrcc and other wrappers
+ * still document answer `404 unknown_func` for every payload shape, so there is no
+ * point keeping them as a fallback: it would only mask the real error.
+ *
+ * It takes a JSON `archive_arr` listing the items to zip and answers
+ * `{result: true, url: "https://nwXX.seedr.cc/get_zip_ngen_free/...?st=…&e=…"}` —
+ * the same signed link the Seedr web UI's "copy URL" button produces, valid ~24h.
  */
 export async function createSeedrArchiveUrl(
   env: Env,
   userId: string,
   folderId: string | number
 ): Promise<string> {
-  const data = await callSeedrApi(env, userId, 'create_archive', {
-    folder_id: String(folderId),
-  });
-  const url = data.archive_url || data.url;
+  const numericId = Number(folderId);
+  const idLiteral = Number.isFinite(numericId) ? String(numericId) : JSON.stringify(String(folderId));
+  const archiveArr = `[{"type":"folder","id":${idLiteral}}]`;
+
+  const data = await callSeedrApi(env, userId, 'fetch_archive', { archive_arr: archiveArr });
+
+  const url = data.url || data.archive_url || data.link;
   if (!url) {
     throw new Error('Seedr did not return a valid archive URL');
   }
@@ -420,6 +467,9 @@ export async function createSeedrArchiveUrl(
 
 /**
  * 8. Delete file/folder/torrent from Seedr Cloud to free 2GB quota
+ *
+ * Errors propagate: the only caller is the explicit "Delete" action, and reporting a
+ * failed delete as a success would leave the user staring at an item that never goes away.
  */
 export async function deleteSeedrItem(
   env: Env,
@@ -427,12 +477,11 @@ export async function deleteSeedrItem(
   itemType: 'torrent' | 'folder' | 'file',
   itemId: string | number
 ): Promise<void> {
-  try {
-    const deleteArr = JSON.stringify([{ type: itemType, id: itemId }]);
-    await callSeedrApi(env, userId, 'delete', { delete_arr: deleteArr });
-  } catch (err) {
-    console.warn(`Failed to cleanup Seedr item ${itemType}#${itemId}:`, err);
-  }
+  // Same convention as create_empty_archive: quoted type, numeric id.
+  const numericId = Number(itemId);
+  const idLiteral = Number.isFinite(numericId) ? String(numericId) : JSON.stringify(String(itemId));
+  const deleteArr = `[{"type":${JSON.stringify(itemType)},"id":${idLiteral}}]`;
+  await callSeedrApi(env, userId, 'delete', { delete_arr: deleteArr });
 }
 
 export interface SeedrAccountSettings {

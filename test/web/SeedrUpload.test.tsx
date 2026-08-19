@@ -108,8 +108,9 @@ describe('Seedr Magnet Upload Form UI', () => {
     const folderTitle = await screen.findByText(/LCD Soundsystem - Sound of Silver/i);
     expect(folderTitle).toBeTruthy();
 
-    // Click Transfer to Drive
-    const transferBtn = screen.getByRole('button', { name: /^Transfer to Drive$/i });
+    // Click the folder's "Save to Google Drive" button (label shortens to "Save"
+    // below `sm`, but both halves are in the accessible name).
+    const transferBtn = screen.getByRole('button', { name: /^Save to Google Drive$/i });
     fireEvent.click(transferBtn);
 
     await waitFor(() => {
@@ -167,7 +168,7 @@ describe('Seedr Magnet Upload Form UI', () => {
     });
 
     // Submit
-    const submitBtn = screen.getByRole('button', { name: /Download Magnet & Transfer to Drive/i });
+    const submitBtn = screen.getByRole('button', { name: /Save Torrent/i });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {

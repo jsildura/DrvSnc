@@ -149,6 +149,27 @@ export async function runDriveTransfer(
           } catch (_err) {
             // Probe failed, fallback
           }
+
+          // Generated downloads (Seedr's folder zips, for one) answer HEAD without a
+          // Content-Length. Asking for a single byte gets the total from the 206's
+          // Content-Range instead, which is all the chunk loop needs to get going.
+          if (!Number.isFinite(totalSize) || totalSize <= 0) {
+            try {
+              const ranged = await fetchRemoteWithPolicy(sourceUrl, {
+                headers: { Range: 'bytes=0-0' },
+              });
+              const contentRange = ranged.headers.get('Content-Range');
+              const declaredTotal = contentRange?.match(/\/\s*(\d+)\s*$/);
+              if (declaredTotal) totalSize = parseInt(declaredTotal[1], 10);
+              const ct = ranged.headers.get('Content-Type');
+              if (ct && mimeType === 'application/octet-stream') mimeType = ct;
+              // Never read the body: a server that ignored the Range is answering
+              // with the whole file.
+              await ranged.body?.cancel().catch(() => undefined);
+            } catch (_err) {
+              // Falls through to REMOTE_SIZE_UNKNOWN below
+            }
+          }
         }
       }
 

@@ -155,23 +155,18 @@ seedrRoutes.post('/transfer-item', requireCsrf, async (c) => {
     }
 
     const idempotencyKey = crypto.randomUUID();
-    const { job, isExisting } = await createRemoteJob(c.env, user.id, idempotencyKey, {
+    const { job } = await createRemoteJob(c.env, user.id, idempotencyKey, {
       url: directDownloadUrl,
       filename: finalFilename,
       folderId: body.folderId || undefined,
     });
 
-    if (!isExisting && c.env.DRIVE_TRANSFER) {
-      await c.env.DRIVE_TRANSFER.create({
-        id: `job-${job.id}`,
-        params: { jobId: job.id, userId: user.id },
-      });
-    }
+    // createRemoteJob already starts the DriveTransfer workflow for this job.
+    // Starting a second instance here would download and upload the file twice.
 
-    // Auto cleanup from Seedr
-    c.executionCtx.waitUntil(
-      deleteSeedrItem(c.env, user.id, body.itemType, body.itemId)
-    );
+    // The Seedr copy is deliberately kept: the workflow downloads from the archive /
+    // file URL after this handler returns, and deleting the source now would break it.
+    // Use the "Delete" action on the item once the transfer has finished.
 
     return c.json({
       success: true,

@@ -150,6 +150,124 @@ describe('DriveTransferWorkflow Background Transfer Runner', () => {
     }
   });
 
+  it('derives the size from Content-Range when the source omits Content-Length', async () => {
+    const jobId = 'job-wf-ranged-size';
+    const sourceUrl = 'https://example.com/get_zip_ngen_free/28748985/Release.zip';
+    const totalSize = 2048;
+    const encUrl = await encryptSecret(sourceUrl, env.TOKEN_ENCRYPTION_KEY, userId);
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO upload_jobs (
+           id, user_id, source_kind, source_url_redacted, source_url_encrypted,
+           source_url_iv, filename, file_size, mime_type, status, version
+         ) VALUES (?, ?, 'remote', ?, ?, ?, 'Release.zip', 0,
+                   'application/octet-stream', 'queued', 1)`
+      ).bind(jobId, userId, sourceUrl, encUrl.ciphertext, encUrl.iv),
+      env.DB.prepare(
+        `INSERT INTO upload_attempts
+           (id, job_id, user_id, attempt_number, status)
+         VALUES (?, ?, ?, 1, 'queued')`
+      ).bind(`${jobId}-1`, jobId, userId),
+    ]);
+
+    const originalFetch = globalThis.fetch;
+    const sourceRanges: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return new Response(
+          JSON.stringify({ access_token: 'mock-wf-access-token', expires_in: 3600 }),
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (urlStr === sourceUrl) {
+        // Seedr's generated zips answer HEAD with no Content-Length whatsoever.
+        if (init?.method === 'HEAD') {
+          return new Response(null, { status: 200, headers: { 'Accept-Ranges': 'bytes' } });
+        }
+
+        const range = new Headers(init?.headers).get('Range') || '';
+        sourceRanges.push(range);
+
+        if (range === 'bytes=0-0') {
+          return new Response(new Uint8Array(1), {
+            status: 206,
+            headers: {
+              'Content-Type': 'application/zip',
+              'Content-Range': `bytes 0-0/${totalSize}`,
+            },
+          });
+        }
+
+        return new Response(new Uint8Array(totalSize), {
+          status: 206,
+          headers: {
+            'Content-Type': 'application/zip',
+            'Content-Range': `bytes 0-${totalSize - 1}/${totalSize}`,
+          },
+        });
+      }
+
+      if (urlStr.includes('upload_id=mock-resumable-session-123')) {
+        const cr = new Headers(init?.headers).get('Content-Range');
+        if (cr && cr.startsWith('bytes */')) {
+          return new Response(null, { status: 308, headers: { Range: 'bytes=0--1' } });
+        }
+        return new Response(
+          JSON.stringify({
+            id: 'drive-file-wf-ranged',
+            name: 'Release.zip',
+            webViewLink: 'https://drive.google.com/file/d/drive-file-wf-ranged/view',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (urlStr.includes('googleapis.com/upload/drive/v3/files?uploadType=resumable')) {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            Location: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=mock-resumable-session-123',
+          },
+        });
+      }
+
+      return originalFetch(input, init);
+    });
+
+    try {
+      const step = { do: async <T>(_name: string, fn: () => Promise<T>) => fn() };
+      await runDriveTransfer(env, { jobId, userId }, step);
+
+      const job = await env.DB.prepare(
+        'SELECT status, file_size, mime_type, progress_bytes, drive_file_id FROM upload_jobs WHERE id = ?'
+      ).bind(jobId).first<{
+        status: string;
+        file_size: number;
+        mime_type: string;
+        progress_bytes: number;
+        drive_file_id: string;
+      }>();
+
+      expect(job).toEqual({
+        status: 'completed',
+        file_size: totalSize,
+        mime_type: 'application/zip',
+        progress_bytes: totalSize,
+        drive_file_id: 'drive-file-wf-ranged',
+      });
+
+      // The single-byte probe is what recovered the total, so it must come first.
+      expect(sourceRanges[0]).toBe('bytes=0-0');
+      expect(sourceRanges[1]).toBe(`bytes=0-${totalSize - 1}`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('handles cancellation gracefully before chunk upload', async () => {
     const jobId = 'job-wf-cancel-1';
     const encUrl = await encryptSecret('https://example.com/cancel.iso', env.TOKEN_ENCRYPTION_KEY, userId);
@@ -361,6 +479,10 @@ describe('DriveTransferWorkflow Background Transfer Runner', () => {
       if (url === sourceUrl && init?.method === 'HEAD') {
         return new Response(null, { status: 405 });
       }
+      // Range probe: this server streams without ever declaring a length.
+      if (url === sourceUrl) {
+        return new Response(null, { status: 200 });
+      }
       if (url.includes('googleapis.com/upload/drive/v3/files')) {
         driveSessionRequests.push(url);
       }
@@ -418,6 +540,10 @@ describe('DriveTransferWorkflow Background Transfer Runner', () => {
           contentLength === null ? undefined : { 'Content-Length': contentLength };
 
         if (url === sourceUrl && init?.method === 'HEAD') {
+          return new Response(null, { status: 200, headers: headHeaders });
+        }
+        // Range probe: no Content-Range either, so the size stays unknown.
+        if (url === sourceUrl) {
           return new Response(null, { status: 200, headers: headHeaders });
         }
         if (url.includes('googleapis.com/upload/drive/v3/files')) {
