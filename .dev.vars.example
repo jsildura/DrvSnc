@@ -1,0 +1,11 @@
+# Google OAuth 2.0 Web Client Credentials
+GOOGLE_CLIENT_ID=dev-web-uploader.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=example_google_client_secret_do_not_commit_real_values
+
+# Server Security & Token Encryption (64 hex chars = 32 bytes AES-256 key)
+TOKEN_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+SESSION_SECRET=local-session-signing-secret-minimum-32-chars-long
+
+# Application Origin & Runtime Environment
+APP_ORIGIN=http://localhost:8787
+ENVIRONMENT=development

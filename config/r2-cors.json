@@ -1,0 +1,20 @@
+[
+  {
+    "AllowedOrigins": [
+      "http://localhost:5173",
+      "http://localhost:8787",
+      "https://*.workers.dev",
+      "https://google-drive-uploader.pages.dev"
+    ],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": [
+      "Content-Type",
+      "Content-Length",
+      "X-Amz-Content-Sha256",
+      "X-Amz-Date",
+      "Authorization"
+    ],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

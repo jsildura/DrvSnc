@@ -1,0 +1,93 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "google-drive-uploader",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "TOKEN_ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "SESSION_SECRET": "session-secret-key-32-chars-minimum!",
+    "GOOGLE_CLIENT_ID": "dev-web-uploader.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "dev-google-client-secret-placeholder",
+    "APP_ORIGIN": "http://localhost:8787",
+    "ENVIRONMENT": "development"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gdu-db-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "gdu-uploads-local"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "drive-transfer-workflow",
+      "binding": "DRIVE_TRANSFER",
+      "class_name": "DriveTransferWorkflow"
+    },
+    {
+      "name": "drive-copy-workflow",
+      "binding": "DRIVE_COPY",
+      "class_name": "DriveCopyWorkflow"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  },
+  "env": {
+    "staging": {
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "APP_ORIGIN": "https://staging.streamflix.app"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "gdu-db-staging",
+          "database_id": "staging-d1-db-id",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "UPLOADS",
+          "bucket_name": "gdu-uploads-staging"
+        }
+      ]
+    },
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production",
+        "APP_ORIGIN": "https://uploader.streamflix.app"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "gdu-db-prod",
+          "database_id": "prod-d1-db-id",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "UPLOADS",
+          "bucket_name": "gdu-uploads-prod"
+        }
+      ]
+    }
+  }
+}

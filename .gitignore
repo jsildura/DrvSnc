@@ -1,0 +1,93 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output & bundle stats
+dist/
+dist-ssr/
+build/
+stats.html
+*.tsbuildinfo
+
+# Testing & E2E (Playwright, Vitest, Coverage)
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+coverage/
+.nyc_output/
+
+# Environment variables, secrets & credentials
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Cloudflare & local storage/database state
+.wrangler/
+.mf/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Internal notes, specs & local documentation
+OPTIMIZATION_CHANGES.md
+GITHUB_ACTIONS_MULTI_ACCOUNT_FIX.md
+PRD.md
+*.local.md
+Version Control.txt
+TODO.md
+NOTES.md
+scratch/
+
+# IDE & Editor files
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs & debugging
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Caches & temporary files
+*.tmp
+.cache/
+.freebuff/
+.eslintcache
+.stylelintcache
+.parcel-cache
+.turbo
+
+# Chrome Extension / legacy components & packaging
+*.pem
+*.crx
+*.zip
+legacy-extension/
+github-actions-uploader/
+src/sw.ts
+src/content.ts
+src/popup/
+src/options/
+
