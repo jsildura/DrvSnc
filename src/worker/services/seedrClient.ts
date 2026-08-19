@@ -78,13 +78,13 @@ export async function pollSeedrDeviceAuthorization(
   if (!res.ok) {
     return { status: false, response: `HTTP_${res.status}` };
   }
-  const data = (await res.json()) as Record<string, unknown>;
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
-  if (data.status === true && typeof data.access_token === 'string') {
+  if (typeof data.access_token === 'string' && data.access_token.trim().length > 0) {
     return {
       status: true,
       tokens: {
-        access_token: data.access_token,
+        access_token: data.access_token.trim(),
         refresh_token: String(data.refresh_token || ''),
         expires_in: Number(data.expires_in || 3600),
       },
@@ -93,7 +93,12 @@ export async function pollSeedrDeviceAuthorization(
 
   return {
     status: false,
-    response: typeof data.response === 'string' ? data.response : 'pending',
+    response:
+      typeof data.error === 'string'
+        ? data.error
+        : typeof data.response === 'string'
+        ? data.response
+        : 'pending',
   };
 }
 

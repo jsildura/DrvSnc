@@ -309,17 +309,44 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
                 <p className="text-xs text-slate-600 dark:text-slate-300">
                   2. Open Seedr devices page and enter the code into "Add Media Device":
                 </p>
-                <a
-                  href={deviceCodeData.verification_url || 'https://www.seedr.cc/devices'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-colors"
-                >
-                  <span>Open seedr.cc/devices</span>
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </a>
+                <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+                  <a
+                    href={deviceCodeData.verification_url || 'https://www.seedr.cc/devices'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-colors"
+                  >
+                    <span>Open seedr.cc/devices</span>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const check = await authorizeSeedrDevice(deviceCodeData.device_code);
+                        if (check.success) {
+                          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+                          setIsAuthorizing(false);
+                          setDeviceCodeData(null);
+                          fetchStatus();
+                        } else {
+                          setAuthError('Seedr has not confirmed authorization yet. Please make sure you clicked "ADD +" on seedr.cc/devices.');
+                        }
+                      } catch (err) {
+                        setAuthError((err as Error).message);
+                      }
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shrink-0"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>I Approved on Seedr</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
