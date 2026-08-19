@@ -1,13 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../state/AppProvider';
 import { LegalModal, LegalDocType } from '../components/LegalModal';
 import {
   getSeedrStatus,
-  getSeedrDeviceCode,
-  authorizeSeedrDevice,
+  loginSeedrAccount,
   disconnectSeedr,
   SeedrStatusResponse,
-  SeedrDeviceCodeData,
 } from '../api/seedr';
 
 function formatBytes(bytes?: number): string {
@@ -43,10 +41,11 @@ export function SettingsPage() {
   // Seedr integration state
   const [seedrStatus, setSeedrStatus] = useState<SeedrStatusResponse>({ connected: false });
   const [seedrLoading, setSeedrLoading] = useState(true);
-  const [deviceCodeData, setDeviceCodeData] = useState<SeedrDeviceCodeData | null>(null);
-  const [copiedSeedrCode, setCopiedSeedrCode] = useState(false);
+  const [seedrEmail, setSeedrEmail] = useState('');
+  const [seedrPassword, setSeedrPassword] = useState('');
+  const [isSeedrLoggingIn, setIsSeedrLoggingIn] = useState(false);
   const [seedrActionMsg, setSeedrActionMsg] = useState<string | null>(null);
-  const seedrPollRef = useRef<any>(null);
+  const [seedrErrorMsg, setSeedrErrorMsg] = useState<string | null>(null);
 
   const fetchSeedr = async () => {
     try {
@@ -61,45 +60,38 @@ export function SettingsPage() {
 
   useEffect(() => {
     fetchSeedr();
-    return () => {
-      if (seedrPollRef.current) clearInterval(seedrPollRef.current);
-    };
   }, []);
 
-  const handleStartSeedrPairing = async () => {
-    setSeedrActionMsg(null);
-    try {
-      const data = await getSeedrDeviceCode();
-      setDeviceCodeData(data);
+  const handleSeedrLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!seedrEmail.trim() || !seedrPassword.trim()) return;
 
-      if (seedrPollRef.current) clearInterval(seedrPollRef.current);
-      seedrPollRef.current = setInterval(async () => {
-        try {
-          const res = await authorizeSeedrDevice(data.device_code);
-          if (res.success) {
-            if (seedrPollRef.current) clearInterval(seedrPollRef.current);
-            setDeviceCodeData(null);
-            setSeedrActionMsg('Seedr connected successfully!');
-            fetchSeedr();
-          }
-        } catch {
-          // Continue polling
-        }
-      }, 4000);
+    setIsSeedrLoggingIn(true);
+    setSeedrErrorMsg(null);
+    setSeedrActionMsg(null);
+
+    try {
+      await loginSeedrAccount(seedrEmail.trim(), seedrPassword.trim());
+      setSeedrPassword('');
+      setSeedrEmail('');
+      setSeedrActionMsg('Seedr account connected successfully!');
+      await fetchSeedr();
     } catch (err) {
-      setSeedrActionMsg((err as Error).message || 'Failed to start Seedr pairing');
+      setSeedrErrorMsg((err as Error).message || 'Failed to login with Seedr');
+    } finally {
+      setIsSeedrLoggingIn(false);
     }
   };
 
   const handleDisconnectSeedr = async () => {
+    if (!confirm('Are you sure you want to disconnect your Seedr.cc account?')) return;
     try {
-      setSeedrActionMsg('Disconnecting...');
       await disconnectSeedr();
       setSeedrStatus({ connected: false });
-      setSeedrActionMsg('Seedr account disconnected');
-      setTimeout(() => setSeedrActionMsg(null), 3000);
+      setSeedrActionMsg('Seedr account disconnected.');
+      setSeedrErrorMsg(null);
     } catch (err) {
-      setSeedrActionMsg((err as Error).message || 'Failed to disconnect');
+      setSeedrErrorMsg((err as Error).message || 'Failed to disconnect Seedr account');
     }
   };
 
@@ -221,58 +213,64 @@ export function SettingsPage() {
             </button>
           </div>
         ) : (
-          <div className="space-y-3 pt-1">
-            {!deviceCodeData ? (
+          <form onSubmit={handleSeedrLogin} className="space-y-3 pt-1 max-w-md">
+            <div className="space-y-2">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  Seedr Email / Username
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={seedrEmail}
+                  onChange={(e) => setSeedrEmail(e.target.value)}
+                  placeholder="your-email@example.com"
+                  className="mt-1 w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  Seedr Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={seedrPassword}
+                  onChange={(e) => setSeedrPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="mt-1 w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
               <button
-                type="button"
-                onClick={handleStartSeedrPairing}
-                className="py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
+                type="submit"
+                disabled={isSeedrLoggingIn || !seedrEmail.trim() || !seedrPassword.trim()}
+                className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
               >
-                <span>Connect Seedr.cc</span>
+                <span>{isSeedrLoggingIn ? 'Connecting...' : 'Connect Seedr Account'}</span>
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
               </button>
-            ) : (
-              <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
-                  <span>Enter Code on Seedr.cc</span>
-                  <span className="text-amber-600 dark:text-amber-400 font-normal">Waiting for approval...</span>
-                </div>
-                <p className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900/50">
-                  ⚠️ Make sure you are logged into your <a href="https://www.seedr.cc" target="_blank" rel="noopener noreferrer" className="underline font-bold">Seedr.cc</a> account in this browser before entering the code on <code>seedr.cc/devices</code>.
-                </p>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 p-2 rounded-xl bg-white dark:bg-slate-900 font-mono text-center font-bold text-indigo-600 dark:text-indigo-400 tracking-wider">
-                    {deviceCodeData.user_code}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(deviceCodeData.user_code);
-                      setCopiedSeedrCode(true);
-                      setTimeout(() => setCopiedSeedrCode(false), 2000);
-                    }}
-                    className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold"
-                  >
-                    {copiedSeedrCode ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-                <a
-                  href={deviceCodeData.verification_url || 'https://www.seedr.cc/devices'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block text-center py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
-                >
-                  Open seedr.cc/devices
-                </a>
-              </div>
-            )}
-          </div>
+              <a
+                href="https://www.seedr.cc"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-indigo-600 dark:text-indigo-400 underline font-medium"
+              >
+                Register free
+              </a>
+            </div>
+          </form>
         )}
 
         {seedrActionMsg && (
-          <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">{seedrActionMsg}</p>
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">{seedrActionMsg}</p>
+        )}
+        {seedrErrorMsg && (
+          <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">{seedrErrorMsg}</p>
         )}
       </div>
 

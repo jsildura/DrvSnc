@@ -19,18 +19,24 @@ describe('Seedr Magnet Upload Form UI', () => {
     cleanup();
   });
 
-  it('switches to Magnet / Torrent tab and initiates device pairing when not connected', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+  it('switches to Magnet / Torrent tab and connects via direct email and password login', async () => {
+    let connected = false;
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes('/api/v1/seedr/status')) {
-        return mockJsonResponse({ connected: false });
-      }
-      if (url.includes('/api/v1/seedr/device/code')) {
         return mockJsonResponse({
-          device_code: 'dev-1234',
-          user_code: 'TEST-99',
-          verification_url: 'https://www.seedr.cc/devices',
-          expires_in: 300,
-          interval: 5,
+          connected,
+          username: connected ? 'user@example.com' : undefined,
+          spaceUsed: connected ? 1000000 : 0,
+          spaceMax: 2147483648,
+          torrents: [],
+        });
+      }
+      if (url.includes('/api/v1/seedr/login') && init?.method === 'POST') {
+        connected = true;
+        return mockJsonResponse({
+          success: true,
+          username: 'user@example.com',
         });
       }
       return mockJsonResponse({});
@@ -47,24 +53,34 @@ describe('Seedr Magnet Upload Form UI', () => {
       expect(screen.getByText(/Remote Torrent & Magnet Downloads/i)).toBeTruthy();
     });
 
-    // Click Connect Seedr.cc
-    const connectBtn = screen.getByRole('button', { name: /Connect Seedr\.cc/i });
-    fireEvent.click(connectBtn);
+    // Fill in Email and Password
+    const emailInput = screen.getByPlaceholderText('your-email@example.com');
+    const passwordInput = screen.getByPlaceholderText('••••••••');
+    fireEvent.change(emailInput, { target: { value: 'user@example.com' } });
+    fireEvent.change(passwordInput, { target: { value: 'secretpass123' } });
 
-    // Verify user code is shown
+    // Click Connect Seedr Account
+    const loginBtn = screen.getByRole('button', { name: /Connect Seedr Account/i });
+    fireEvent.click(loginBtn);
+
+    // Verify form transitions to connected magnet transfer view
     await waitFor(() => {
-      expect(screen.getByText('TEST-99')).toBeTruthy();
-      expect(screen.getByText(/Waiting for authorization/i)).toBeTruthy();
+      expect(screen.getByPlaceholderText('magnet:?xt=urn:btih:...')).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Disconnect/i })).toBeTruthy();
     });
   });
 
-  it('renders magnet input form when connected and submits magnet transfer', async () => {
+  it('renders magnet input form when connected, submits transfer, and allows disconnecting', async () => {
     const onJobCreatedMock = vi.fn();
+    let disconnected = false;
 
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+    // mock window.confirm for disconnect
+    vi.spyOn(window, 'confirm').mockImplementation(() => true);
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes('/api/v1/seedr/status')) {
         return mockJsonResponse({
-          connected: true,
+          connected: !disconnected,
           username: 'Tester Seedr',
           spaceUsed: 524288000,
           spaceMax: 2147483648,
@@ -78,6 +94,10 @@ describe('Seedr Magnet Upload Form UI', () => {
           jobId: 'job-seedr-123',
           message: 'Torrent ready! Transferring directly to Google Drive...',
         });
+      }
+      if (url.includes('/api/v1/seedr/disconnect') && init?.method === 'DELETE') {
+        disconnected = true;
+        return mockJsonResponse({ success: true });
       }
       return mockJsonResponse({});
     });
@@ -104,6 +124,15 @@ describe('Seedr Magnet Upload Form UI', () => {
     await waitFor(() => {
       expect(onJobCreatedMock).toHaveBeenCalled();
       expect(screen.getByText(/Torrent ready! Transferring directly to Google Drive\.\.\./i)).toBeTruthy();
+    });
+
+    // Click Disconnect button
+    const disconnectBtn = screen.getByRole('button', { name: /Disconnect/i });
+    fireEvent.click(disconnectBtn);
+
+    // Form should return to not connected login view
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('your-email@example.com')).toBeTruthy();
     });
   });
 });
