@@ -3,6 +3,9 @@ import { apiRequest } from './client';
 export interface SeedrStatusResponse {
   connected: boolean;
   username?: string;
+  email?: string;
+  isPremium?: boolean;
+  packageName?: string;
   spaceUsed?: number;
   spaceMax?: number;
   torrents?: Array<{

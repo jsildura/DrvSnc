@@ -200,7 +200,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
                 Connect Seedr.cc Account
               </h4>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Don't have an account? <a href="https://www.seedr.cc" target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 font-semibold underline hover:text-indigo-500">Register free on Seedr.cc</a>
+                Don't have an account? <a href="https://www.seedr.cc/signup" target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 font-semibold underline hover:text-indigo-500">Register free on Seedr.cc</a>
               </p>
             </div>
 
@@ -268,8 +268,17 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
           <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
-            Connected to Seedr ({seedrStatus.username || 'Free Account'})
+            {seedrStatus.username || seedrStatus.email || 'Seedr Account'}
           </span>
+          {seedrStatus.isPremium ? (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50 uppercase tracking-wider shrink-0">
+              ★ {seedrStatus.packageName || 'Premium'}
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+              Non-Premium
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -341,11 +350,10 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
       {/* Status / Error / Success Message */}
       {transferMessage && (
         <div
-          className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 ${
-            transferMessage.variant === 'success'
+          className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 ${transferMessage.variant === 'success'
               ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50'
               : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/50'
-          }`}
+            }`}
         >
           <span>{transferMessage.text}</span>
         </div>

@@ -15,6 +15,7 @@ import {
   createSeedrArchiveUrl,
   deleteSeedrItem,
   loginWithSeedrPassword,
+  getSeedrSettings,
 } from '../services/seedrClient';
 import { createRemoteJob } from '../services/jobRepository';
 
@@ -30,7 +31,7 @@ export const seedrRoutes = new Hono<{
 // All Seedr routes require active session
 seedrRoutes.use('*', requireSession);
 
-// 1. GET /status - check connection status & quota
+// 1. GET /status - check connection status, premium tier & real space quota
 seedrRoutes.get('/status', async (c) => {
   const user = c.get('user')!;
   const creds = await getSeedrCredentials(c.env, user.id);
@@ -42,18 +43,33 @@ seedrRoutes.get('/status', async (c) => {
   }
 
   try {
-    const contents = await getSeedrContents(c.env, user.id);
+    const [settings, contents] = await Promise.all([
+      getSeedrSettings(c.env, user.id).catch(() => null),
+      getSeedrContents(c.env, user.id).catch(() => null),
+    ]);
+
+    const spaceUsed = settings?.spaceUsed ?? contents?.space_used ?? 0;
+    const spaceMax = settings?.spaceMax ?? contents?.space_max ?? 2147483648;
+    const isPremium = settings?.isPremium ?? false;
+    const packageName = settings?.packageName ?? (isPremium ? 'Premium' : 'Free');
+    const username = settings?.username || creds.username || 'Seedr User';
+
     return c.json({
       connected: true,
-      username: creds.username || 'Seedr User',
-      spaceUsed: contents.space_used || 0,
-      spaceMax: contents.space_max || 2147483648,
-      torrents: contents.torrents,
+      username,
+      email: settings?.email,
+      isPremium,
+      packageName,
+      spaceUsed,
+      spaceMax,
+      torrents: contents?.torrents || [],
     });
   } catch (err) {
     return c.json({
       connected: true,
       username: creds.username || 'Seedr User',
+      isPremium: false,
+      packageName: 'Free Tier',
       spaceUsed: 0,
       spaceMax: 2147483648,
       torrents: [],

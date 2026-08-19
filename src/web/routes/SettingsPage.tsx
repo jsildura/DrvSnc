@@ -193,16 +193,27 @@ export function SettingsPage() {
           </div>
 
           {seedrStatus.connected && (
-            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 w-fit">
-              Connected ({formatBytes(seedrStatus.spaceUsed)} / {formatBytes(seedrStatus.spaceMax)})
-            </span>
+            <div className="flex items-center gap-2">
+              {seedrStatus.isPremium ? (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50 uppercase tracking-wider">
+                  ★ {seedrStatus.packageName || 'Premium'}
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                  Non-Premium
+                </span>
+              )}
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 w-fit">
+                Connected ({formatBytes(seedrStatus.spaceUsed)} / {formatBytes(seedrStatus.spaceMax)})
+              </span>
+            </div>
           )}
         </div>
 
         {seedrStatus.connected ? (
           <div className="flex items-center justify-between pt-2">
             <div className="text-xs text-slate-600 dark:text-slate-400">
-              <span className="font-semibold text-slate-800 dark:text-slate-200">Account:</span> {seedrStatus.username || 'Seedr User'} (Free 2GB Cloud Tier)
+              <span className="font-semibold text-slate-800 dark:text-slate-200">Account:</span> {seedrStatus.username || seedrStatus.email || 'Seedr User'} ({seedrStatus.isPremium ? seedrStatus.packageName || 'Premium' : 'Free Tier'})
             </div>
             <button
               type="button"

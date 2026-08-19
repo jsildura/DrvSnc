@@ -382,3 +382,45 @@ export async function deleteSeedrItem(
     console.warn(`Failed to cleanup Seedr item ${itemType}#${itemId}:`, err);
   }
 }
+
+export interface SeedrAccountSettings {
+  username?: string;
+  email?: string;
+  isPremium: boolean;
+  packageName?: string;
+  spaceUsed: number;
+  spaceMax: number;
+  bandwidthUsed?: number;
+  bandwidthMax?: number;
+}
+
+/**
+ * 9. Fetch Seedr User Settings (Premium tier, total quota, account info)
+ */
+export async function getSeedrSettings(
+  env: Env,
+  userId: string
+): Promise<SeedrAccountSettings> {
+  const data = await callSeedrApi(env, userId, 'get_settings', {});
+  const account = data.account || {};
+  const isPremium =
+    account.premium === 1 ||
+    account.premium === true ||
+    data.is_premium === 1 ||
+    data.is_premium === true;
+  const packageName =
+    account.package_name || (isPremium ? 'Premium' : 'Free');
+  const spaceUsed = Number(account.space_used || data.space_used || 0);
+  const spaceMax = Number(account.space_max || data.space_max || 2147483648);
+
+  return {
+    username: account.username || account.email,
+    email: account.email,
+    isPremium,
+    packageName,
+    spaceUsed,
+    spaceMax,
+    bandwidthUsed: account.bandwidth_used,
+    bandwidthMax: data.bandwidth_max,
+  };
+}
