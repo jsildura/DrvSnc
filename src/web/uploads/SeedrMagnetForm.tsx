@@ -165,19 +165,34 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="font-bold text-indigo-600 dark:text-indigo-400">🎁 100% Free</span>
+              <span className="flex items-center gap-1.5 font-bold text-indigo-600 dark:text-indigo-400">
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V6a2 2 0 10-2 2h2zm-7 4h14a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2z" />
+                </svg>
+                <span>100% Free</span>
+              </span>
               <p className="text-[11px] text-slate-600 dark:text-slate-400">
                 Uses Seedr's free cloud seedbox (up to 2GB per torrent, no card needed).
               </p>
             </div>
             <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="font-bold text-emerald-600 dark:text-emerald-400">⚡ Instant Cache</span>
+              <span className="flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-400">
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>Instant Cache</span>
+              </span>
               <p className="text-[11px] text-slate-600 dark:text-slate-400">
                 Popular torrents transfer to Google Drive in seconds.
               </p>
             </div>
             <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="font-bold text-blue-600 dark:text-blue-400">♻️ Auto-Recycled</span>
+              <span className="flex items-center gap-1.5 font-bold text-blue-600 dark:text-blue-400">
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Auto-Recycled</span>
+              </span>
               <p className="text-[11px] text-slate-600 dark:text-slate-400">
                 Automatically frees up Seedr space after Google Drive upload finishes.
               </p>
@@ -190,7 +205,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
               onClick={handleStartDeviceAuth}
               className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-2"
             >
-              <span>Connect Free Seedr.cc Account (1-Click)</span>
+              <span>Connect Seedr.cc</span>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
               </svg>

@@ -47,8 +47,8 @@ describe('Seedr Magnet Upload Form UI', () => {
       expect(screen.getByText(/Remote Torrent & Magnet Downloads/i)).toBeTruthy();
     });
 
-    // Click Connect Free Seedr Account
-    const connectBtn = screen.getByRole('button', { name: /Connect Free Seedr\.cc Account/i });
+    // Click Connect Seedr.cc
+    const connectBtn = screen.getByRole('button', { name: /Connect Seedr\.cc/i });
     fireEvent.click(connectBtn);
 
     // Verify user code is shown
