@@ -4,7 +4,10 @@
   "description": "Chrome Extension to upload files to Google Drive from URLs or local files directly to Google Drive with Material 3 UI",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "start": "node scripts/start-app.js",
+    "dev": "node scripts/start-app.js",
+    "dev:web": "vite",
+    "dev:worker": "wrangler dev",
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
