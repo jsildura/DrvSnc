@@ -79,15 +79,26 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-    const errorPayload =
-      data && typeof data === 'object' && 'error' in data
-        ? ((data as { error?: ApiErrorPayload }).error as ApiErrorPayload | undefined)
-        : undefined;
+    let message = response.statusText || 'API request failed';
+    let code = `HTTP_${response.status}`;
+    let retriable = false;
+    let requestId = response.headers.get('x-request-id') || undefined;
 
-    const code = errorPayload?.code || `HTTP_${response.status}`;
-    const message = errorPayload?.message || response.statusText || 'API request failed';
-    const retriable = Boolean(errorPayload?.retriable);
-    const requestId = errorPayload?.requestId || response.headers.get('x-request-id') || undefined;
+    if (data && typeof data === 'object') {
+      const obj = data as Record<string, any>;
+      if (typeof obj.error === 'string') {
+        message = obj.error;
+      } else if (obj.error && typeof obj.error === 'object') {
+        message = obj.error.message || message;
+        code = obj.error.code || code;
+        retriable = Boolean(obj.error.retriable);
+        requestId = obj.error.requestId || requestId;
+      } else if (typeof obj.message === 'string') {
+        message = obj.message;
+      }
+    } else if (typeof data === 'string' && data.trim()) {
+      message = data;
+    }
 
     const error = new ApiError(code, message, response.status, retriable, requestId);
 

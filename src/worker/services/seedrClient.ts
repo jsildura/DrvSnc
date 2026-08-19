@@ -257,11 +257,12 @@ async function callSeedrApi(
   }
 
   const doRequest = async (token: string) => {
+    const url = new URL(RESOURCE_URL);
+    url.searchParams.set('func', action);
+    url.searchParams.set('action', action);
+    url.searchParams.set('access_token', token);
+
     if (method === 'GET') {
-      const url = new URL(RESOURCE_URL);
-      url.searchParams.set('action', action);
-      url.searchParams.set('func', action);
-      url.searchParams.set('access_token', token);
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
@@ -273,13 +274,15 @@ async function callSeedrApi(
       });
     }
 
-    const body = new URLSearchParams({
-      action,
-      func: action,
-      access_token: token,
-      ...params,
-    });
-    return fetch(RESOURCE_URL, {
+    const body = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      body.set(k, v);
+    }
+    body.set('func', action);
+    body.set('action', action);
+    body.set('access_token', token);
+
+    return fetch(url.toString(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
