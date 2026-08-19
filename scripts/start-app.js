@@ -81,17 +81,13 @@ console.log(`${colors.bright}${colors.green}Starting services:${colors.reset}`);
 console.log(` • Backend (API / D1 / R2 / Workflows): ${colors.cyan}http://localhost:8787${colors.reset}`);
 console.log(` • Frontend (React 18 SPA):           ${colors.magenta}http://localhost:5173${colors.reset}\n`);
 
-const workerProcess = spawn(npx, ['wrangler', 'dev', '--port', '8787'], {
-  cwd: rootDir,
-  shell: true,
-  env: { ...process.env, FORCE_COLOR: '1' },
-});
+const workerProcess = isWindows
+  ? spawn('npx.cmd wrangler dev --port 8787', { cwd: rootDir, shell: true, env: { ...process.env, FORCE_COLOR: '1' } })
+  : spawn('npx', ['wrangler', 'dev', '--port', '8787'], { cwd: rootDir, shell: false, env: { ...process.env, FORCE_COLOR: '1' } });
 
-const viteProcess = spawn(npx, ['vite', '--port', '5173', '--open'], {
-  cwd: rootDir,
-  shell: true,
-  env: { ...process.env, FORCE_COLOR: '1' },
-});
+const viteProcess = isWindows
+  ? spawn('npx.cmd vite --port 5173 --open', { cwd: rootDir, shell: true, env: { ...process.env, FORCE_COLOR: '1' } })
+  : spawn('npx', ['vite', '--port', '5173', '--open'], { cwd: rootDir, shell: false, env: { ...process.env, FORCE_COLOR: '1' } });
 
 // Stream Worker logs
 workerProcess.stdout.on('data', (data) => log('API', colors.cyan, data));
