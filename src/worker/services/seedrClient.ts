@@ -121,6 +121,41 @@ export async function refreshSeedrToken(refreshToken: string): Promise<SeedrToke
 }
 
 /**
+ * 4. Authenticate directly via Seedr Username & Password
+ */
+export async function loginWithSeedrPassword(
+  username: string,
+  password: string
+): Promise<SeedrTokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: 'password',
+    client_id: 'seedr_chrome',
+    type: 'login',
+    username,
+    password,
+  });
+
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  const json = (await res.json().catch(() => ({}))) as Record<string, any>;
+  if (!res.ok || !json.access_token) {
+    throw new Error(
+      json.error_description || json.error || 'Invalid Seedr email or password. Please check your credentials.'
+    );
+  }
+
+  return {
+    access_token: json.access_token,
+    refresh_token: json.refresh_token || '',
+    expires_in: json.expires_in || 3600,
+  };
+}
+
+/**
  * Save encrypted Seedr tokens in D1
  */
 export async function saveSeedrCredentials(

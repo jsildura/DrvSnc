@@ -60,6 +60,16 @@ export async function disconnectSeedr(): Promise<void> {
   });
 }
 
+export async function loginSeedrAccount(
+  username: string,
+  password: string
+): Promise<{ success: boolean; username?: string }> {
+  return apiRequest<{ success: boolean; username?: string }>('/api/v1/seedr/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+}
+
 export async function submitSeedrTransfer(params: {
   magnetLink: string;
   folderId?: string;

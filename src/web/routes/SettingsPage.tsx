@@ -239,6 +239,9 @@ export function SettingsPage() {
                   <span>Enter Code on Seedr.cc</span>
                   <span className="text-amber-600 dark:text-amber-400 font-normal">Waiting for approval...</span>
                 </div>
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-200 dark:border-amber-900/50">
+                  ⚠️ Make sure you are logged into your <a href="https://www.seedr.cc" target="_blank" rel="noopener noreferrer" className="underline font-bold">Seedr.cc</a> account in this browser before entering the code on <code>seedr.cc/devices</code>.
+                </p>
                 <div className="flex items-center gap-2">
                   <div className="flex-1 p-2 rounded-xl bg-white dark:bg-slate-900 font-mono text-center font-bold text-indigo-600 dark:text-indigo-400 tracking-wider">
                     {deviceCodeData.user_code}

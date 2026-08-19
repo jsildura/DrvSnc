@@ -14,6 +14,7 @@ import {
   fetchSeedrFileUrl,
   createSeedrArchiveUrl,
   deleteSeedrItem,
+  loginWithSeedrPassword,
 } from '../services/seedrClient';
 import { createRemoteJob } from '../services/jobRepository';
 
@@ -57,6 +58,39 @@ seedrRoutes.get('/status', async (c) => {
       spaceMax: 2147483648,
       torrents: [],
     });
+  }
+});
+
+// 2. POST /login - authenticate directly with Seedr credentials
+seedrRoutes.post('/login', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    username?: string;
+    password?: string;
+  };
+
+  const username = body.username?.trim();
+  const password = body.password?.trim();
+
+  if (!username || !password) {
+    return c.json({ error: 'Seedr email and password are required' }, 400);
+  }
+
+  try {
+    const tokens = await loginWithSeedrPassword(username, password);
+    await saveSeedrCredentials(
+      c.env,
+      user.id,
+      tokens.access_token,
+      tokens.refresh_token,
+      username
+    );
+    return c.json({ success: true, username });
+  } catch (err) {
+    return c.json(
+      { error: (err as Error).message || 'Invalid Seedr login credentials' },
+      400
+    );
   }
 });
 
