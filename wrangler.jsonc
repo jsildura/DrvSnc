@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "google-drive-uploader",
+  "name": "drvsnc",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-08-18",
   "compatibility_flags": ["nodejs_compat"],
@@ -78,7 +78,7 @@
         {
           "binding": "DB",
           "database_name": "gdu-db-prod",
-          "database_id": "prod-d1-db-id",
+          "database_id": "b6be8d06-1472-4e0e-bdd9-353cb400c545",
           "migrations_dir": "migrations"
         }
       ],
@@ -86,6 +86,18 @@
         {
           "binding": "UPLOADS",
           "bucket_name": "gdu-uploads-prod"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "drive-transfer-workflow",
+          "binding": "DRIVE_TRANSFER",
+          "class_name": "DriveTransferWorkflow"
+        },
+        {
+          "name": "drive-copy-workflow",
+          "binding": "DRIVE_COPY",
+          "class_name": "DriveCopyWorkflow"
         }
       ]
     }
