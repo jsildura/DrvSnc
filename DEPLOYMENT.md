@@ -46,6 +46,7 @@ npm run deploy:staging
 
 # Production Deployment
 npm run build
-wrangler d1 migrations apply DB --remote --env production
+npm run db:migrate:status:production   # confirm which migrations are pending
+npm run db:migrate:production          # never skip: a missing table 500s at runtime
 npm run deploy:production
 ```

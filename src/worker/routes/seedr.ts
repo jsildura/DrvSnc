@@ -97,8 +97,18 @@ seedrRoutes.post('/login', requireCsrf, async (c) => {
     return c.json({ error: 'Seedr email and password are required' }, 400);
   }
 
+  let tokens: Awaited<ReturnType<typeof loginWithSeedrPassword>>;
   try {
-    const tokens = await loginWithSeedrPassword(username, password);
+    tokens = await loginWithSeedrPassword(username, password);
+  } catch (err) {
+    // Only Seedr rejecting the credentials belongs under 401.
+    return c.json(
+      { error: (err as Error).message || 'Invalid Seedr email or password' },
+      401
+    );
+  }
+
+  try {
     await saveSeedrCredentials(
       c.env,
       user.id,
@@ -106,17 +116,23 @@ seedrRoutes.post('/login', requireCsrf, async (c) => {
       tokens.refresh_token || '',
       username
     );
-
-    return c.json({
-      success: true,
-      username,
-    });
   } catch (err) {
+    // Seedr accepted the login, so a failure here is ours (e.g. an unapplied D1
+    // migration). Reporting it as 401 sent users off checking their password.
     return c.json(
-      { error: (err as Error).message || 'Invalid Seedr email or password' },
-      401
+      {
+        error: `Signed in to Seedr, but saving the connection failed: ${
+          (err as Error).message || 'unknown storage error'
+        }`,
+      },
+      500
     );
   }
+
+  return c.json({
+    success: true,
+    username,
+  });
 });
 
 // 3. DELETE /disconnect - disconnect Seedr account
