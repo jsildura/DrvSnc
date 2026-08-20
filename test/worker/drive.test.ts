@@ -266,4 +266,58 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // Every listing route hands `pageSize` to Drive straight off the query string via `parseInt`, and
+  // Drive rejects anything outside 1..1000 with an opaque 400 — which reaches the user as
+  // "Failed to list folders" with nothing to act on. The old `|| 50` guard only caught NaN and 0,
+  // because those are the only falsy values parseInt can produce.
+  it('clamps a hostile pageSize into the range Drive accepts', async () => {
+    const originalFetch = globalThis.fetch;
+    const requested: number[] = [];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return new Response(
+          JSON.stringify({ access_token: 'mock-fresh-access-token', expires_in: 3600 }),
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (urlStr.includes('googleapis.com/drive/v3/files')) {
+        requested.push(Number(new URL(urlStr).searchParams.get('pageSize')));
+        return new Response(JSON.stringify({ files: [], nextPageToken: null }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return originalFetch(input, init);
+    });
+
+    try {
+      // '/items' defaults to 50, '/folders' to 100 — the clamp has to keep each route's own default.
+      const cases: Array<[string, string, number]> = [
+        ['items', '-5', 50],
+        ['items', '0', 50],
+        ['items', 'abc', 50],
+        ['items', '999999', 1000],
+        ['items', '75', 75],
+        ['folders', '-1', 100],
+        ['folders', '4096', 1000],
+      ];
+
+      for (const [route, raw] of cases) {
+        const res = await SELF.fetch(
+          `https://example.com/api/v1/drive/${route}?pageSize=${encodeURIComponent(raw)}`,
+          { headers: { Cookie: cookie } }
+        );
+        expect(res.status).toBe(200);
+      }
+
+      expect(requested).toEqual(cases.map(([, , expected]) => expected));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

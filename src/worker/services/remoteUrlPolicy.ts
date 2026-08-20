@@ -15,50 +15,115 @@ function parseIpv4ToUint32(ip: string): number | null {
   return result >>> 0;
 }
 
-export function isPrivateOrReservedIp(host: string): boolean {
-  const cleanHost = host.replace(/^\[|\]$/g, '').toLowerCase();
+function isPrivateOrReservedIpv4(ip32: number): boolean {
+  // 0.0.0.0/8
+  if (((ip32 & 0xff000000) >>> 0) === 0x00000000) return true;
+  // 10.0.0.0/8
+  if (((ip32 & 0xff000000) >>> 0) === 0x0a000000) return true;
+  // 100.64.0.0/10 (CGNAT)
+  if (((ip32 & 0xffc00000) >>> 0) === 0x64400000) return true;
+  // 127.0.0.0/8 (Loopback)
+  if (((ip32 & 0xff000000) >>> 0) === 0x7f000000) return true;
+  // 169.254.0.0/16 (Link-local)
+  if (((ip32 & 0xffff0000) >>> 0) === 0xa9fe0000) return true;
+  // 172.16.0.0/12 (Private)
+  if (((ip32 & 0xfff00000) >>> 0) === 0xac100000) return true;
+  // 192.168.0.0/16 (Private)
+  if (((ip32 & 0xffff0000) >>> 0) === 0xc0a80000) return true;
+  // 224.0.0.0/4 (Multicast)
+  if (((ip32 & 0xf0000000) >>> 0) === 0xe0000000) return true;
+  // 240.0.0.0/4 (Reserved)
+  if (((ip32 & 0xf0000000) >>> 0) === 0xf0000000) return true;
 
-  // IPv4-mapped IPv6 check (e.g. ::ffff:127.0.0.1)
-  if (cleanHost.startsWith('::ffff:')) {
-    const mappedIpv4 = cleanHost.substring(7);
-    return isPrivateOrReservedIp(mappedIpv4);
+  return false;
+}
+
+/**
+ * Expand an IPv6 literal into its eight 16-bit groups, or null if it is not one.
+ *
+ * Both the compressed hex form and a trailing dotted quad are accepted, because they describe the
+ * same address and only one of them survives `new URL()`: the WHATWG serializer rewrites
+ * `::ffff:169.254.169.254` as `::ffff:a9fe:a9fe`, so matching on the readable form alone let the
+ * cloud metadata endpoint through.
+ */
+function parseIpv6Groups(host: string): number[] | null {
+  // A scope id names a local interface; it says nothing about which address this is.
+  let text = host.split('%')[0];
+  if (!text.includes(':')) return null;
+
+  const dotted = text.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted) {
+    const ip32 = parseIpv4ToUint32(dotted[1]);
+    if (ip32 === null || dotted.index === undefined) return null;
+    const high = ((ip32 >>> 16) & 0xffff).toString(16);
+    const low = (ip32 & 0xffff).toString(16);
+    text = `${text.slice(0, dotted.index)}${high}:${low}`;
   }
 
-  // Pure IPv6 checks
-  if (
-    cleanHost === '::1' ||
-    cleanHost === '::' ||
-    cleanHost.startsWith('fe80:') ||
-    cleanHost.startsWith('fc') ||
-    cleanHost.startsWith('fd')
-  ) {
-    return true;
-  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
 
-  // IPv4 checks
-  const ip32 = parseIpv4ToUint32(cleanHost);
-  if (ip32 !== null) {
-    // 0.0.0.0/8
-    if (((ip32 & 0xff000000) >>> 0) === 0x00000000) return true;
-    // 10.0.0.0/8
-    if (((ip32 & 0xff000000) >>> 0) === 0x0a000000) return true;
-    // 100.64.0.0/10 (CGNAT)
-    if (((ip32 & 0xffc00000) >>> 0) === 0x64400000) return true;
-    // 127.0.0.0/8 (Loopback)
-    if (((ip32 & 0xff000000) >>> 0) === 0x7f000000) return true;
-    // 169.254.0.0/16 (Link-local)
-    if (((ip32 & 0xffff0000) >>> 0) === 0xa9fe0000) return true;
-    // 172.16.0.0/12 (Private)
-    if (((ip32 & 0xfff00000) >>> 0) === 0xac100000) return true;
-    // 192.168.0.0/16 (Private)
-    if (((ip32 & 0xffff0000) >>> 0) === 0xc0a80000) return true;
-    // 224.0.0.0/4 (Multicast)
-    if (((ip32 & 0xf0000000) >>> 0) === 0xe0000000) return true;
-    // 240.0.0.0/4 (Reserved)
-    if (((ip32 & 0xf0000000) >>> 0) === 0xf0000000) return true;
+  const toGroups = (part: string): number[] | null => {
+    if (!part) return [];
+    const out: number[] = [];
+    for (const piece of part.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(piece)) return null;
+      out.push(parseInt(piece, 16));
+    }
+    return out;
+  };
+
+  const head = toGroups(halves[0]);
+  const tail = halves.length === 2 ? toGroups(halves[1]) : [];
+  if (!head || !tail) return null;
+
+  if (halves.length === 1) return head.length === 8 ? head : null;
+
+  // `::` has to stand for at least one group, otherwise the address was already full-length.
+  const fill = 8 - head.length - tail.length;
+  if (fill < 1) return null;
+
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
+}
+
+function isPrivateOrReservedIpv6(host: string): boolean {
+  const groups = parseIpv6Groups(host);
+  if (!groups) return false;
+
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+
+  if (groups.every((g) => g === 0)) return true; // :: unspecified
+  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7  unique local
+  if ((g0 & 0xff00) === 0xff00) return true; // ff00::/8  multicast
+
+  // An IPv4 address carried inside an IPv6 one reaches exactly the host the bare address would, so
+  // the IPv4 rules have to apply to the embedded half: ::ffff:0:0/96 (mapped), ::/96 (compatible,
+  // which is also where ::1 lands) and 64:ff9b::/96 (NAT64).
+  const zeroPrefix = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0;
+  const isNat64 = g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0;
+
+  if ((zeroPrefix && (g5 === 0xffff || g5 === 0)) || isNat64) {
+    const embedded = (((g6 << 16) | g7) >>> 0);
+    // ::1 is loopback; every other ::/96 address is an IPv4 one to be judged as such.
+    return embedded === 1 || isPrivateOrReservedIpv4(embedded);
   }
 
   return false;
+}
+
+export function isPrivateOrReservedIp(host: string): boolean {
+  const cleanHost = host.replace(/^\[|\]$/g, '').toLowerCase();
+
+  // Only an address literal can be classified here. A hostname resolves to whatever DNS says, and
+  // pattern-matching one as an IP is what made `fc2.com` read as an fc00::/7 unique-local address
+  // and get refused outright.
+  if (cleanHost.includes(':')) {
+    return isPrivateOrReservedIpv6(cleanHost);
+  }
+
+  const ip32 = parseIpv4ToUint32(cleanHost);
+  return ip32 !== null && isPrivateOrReservedIpv4(ip32);
 }
 
 export function validateRemoteUrl(rawUrl: string): {
@@ -81,12 +146,22 @@ export function validateRemoteUrl(rawUrl: string): {
     return { valid: false, error: 'Malformed URL format' };
   }
 
-  if (parsed.protocol !== 'https:') {
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return { valid: false, error: 'Remote download source must use https: protocol' };
   }
 
-  if (parsed.port && parsed.port !== '443') {
+  const defaultPort = parsed.protocol === 'http:' ? '80' : '443';
+  if (parsed.port && parsed.port !== defaultPort) {
     return { valid: false, error: 'Only standard HTTPS port 443 is permitted' };
+  }
+
+  // A pasted http:// link is upgraded rather than refused. Media hosts routinely answer plain HTTP
+  // with a 301 to their own TLS endpoint, so rejecting the scheme turned links that work perfectly
+  // well into "must use https" errors. The transfer itself still never runs in plaintext: what gets
+  // stored and fetched is the rewritten https URL.
+  if (parsed.protocol === 'http:') {
+    parsed.port = '';
+    parsed.protocol = 'https:';
   }
 
   if (parsed.username || parsed.password) {
@@ -165,6 +240,10 @@ export async function fetchRemoteWithPolicy(
   // Handle redirects
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     const location = response.headers.get('Location');
+    // The redirect's own body is never of interest, and leaving it unread holds the connection open
+    // for as long as the isolate lives.
+    await response.body?.cancel().catch(() => undefined);
+
     if (!location) {
       throw new Error(`Redirect response status ${response.status} missing Location header`);
     }

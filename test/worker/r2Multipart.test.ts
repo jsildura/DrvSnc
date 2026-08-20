@@ -3,6 +3,54 @@ import { env, SELF } from 'cloudflare:test';
 import { applyMigrations } from './testDb';
 import { hashOpaqueToken, encryptSecret } from '../../src/worker/services/crypto';
 import { UploadJobView } from '../../src/shared/contracts';
+import { generateR2Key, stagingFallbackKey } from '../../src/worker/services/r2Multipart';
+
+describe('R2 staging key construction', () => {
+  // Every segment of this key is interpolated into a presigned S3 URL, and the signature covers the
+  // path. A segment that can carry `/`, `..`, `?` or `#` can therefore address a different object
+  // than the one that was signed for — including one under another user's prefix.
+  const hostile = [
+    '../../usr-2/job-9',
+    '../../../etc/passwd',
+    'job?uploadId=stolen',
+    'job#fragment',
+    'job/../../elsewhere',
+    '..',
+    '.',
+    '....//',
+    '.hidden',
+  ];
+
+  it('leaves an ordinary key untouched', () => {
+    expect(generateR2Key('usr-1', 'job-1', 'clip.mp4')).toBe('staging/usr-1/job-1/clip.mp4');
+    expect(stagingFallbackKey('usr-1', 'job-1')).toBe('staging/usr-1/job-1');
+  });
+
+  it('confines each segment to one non-relative path element', () => {
+    for (const value of hostile) {
+      for (const key of [
+        generateR2Key(value, 'job-1', 'clip.mp4'),
+        generateR2Key('usr-1', value, 'clip.mp4'),
+        generateR2Key('usr-1', 'job-1', value),
+        stagingFallbackKey('usr-1', value),
+      ]) {
+        const segments = key.split('/');
+        expect(segments[0]).toBe('staging');
+        expect(segments.length).toBeLessThanOrEqual(4);
+        for (const segment of segments) {
+          expect(segment).not.toBe('');
+          expect(segment).not.toContain('..');
+          expect(segment.startsWith('.')).toBe(false);
+          expect(segment).toMatch(/^[a-zA-Z0-9._-]+$/);
+        }
+      }
+    }
+  });
+
+  it('falls back rather than emitting an empty segment', () => {
+    expect(generateR2Key('', '', '')).toBe('staging/user/job/file');
+  });
+});
 
 describe('R2 Multipart Local File Staging API', () => {
   const userIdA = 'usr-r2-a';
@@ -94,6 +142,63 @@ describe('R2 Multipart Local File Staging API', () => {
       expect(data.partSize).toBe(16 * 1024 * 1024);
       expect(data.partCount).toBe(3);
       expect(data.uploadId).toBeDefined();
+    });
+
+    const createLocal = (idempotencyKey: string, cookie = cookieA, csrf = csrfTokenA) =>
+      SELF.fetch('https://example.com/api/v1/jobs/local', {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          'X-CSRF-Token': csrf,
+          'Idempotency-Key': idempotencyKey,
+          Origin: 'https://example.com',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename: 'archive.zip',
+          fileSize: 1024,
+          mimeType: 'application/zip',
+        }),
+      });
+
+    // The key is not just a dedupe token: it becomes the job id, a segment of the presigned R2 path
+    // and the Workflow instance id, so its shape is checked at the boundary rather than downstream.
+    it('rejects an Idempotency-Key that is not an opaque identifier', async () => {
+      for (const bad of ['../../etc/passwd', 'short', 'has space', 'key/with/slashes', 'a?b=c']) {
+        const res = await createLocal(bad);
+        expect(res.status).toBe(400);
+        const body = await res.json<{ error: { code: string } }>();
+        expect(body.error.code).toBe('INVALID_REQUEST');
+      }
+    });
+
+    it('answers 409 for a key another account already owns', async () => {
+      const shared = 'key-local-shared-owner';
+      expect((await createLocal(shared)).status).toBe(201);
+
+      // `upload_jobs.id` *is* the key, so it is unique table-wide. Scoping the existence check by
+      // user made this land on the insert as a bare UNIQUE violation — a 500 — and left the
+      // multipart upload opened moments earlier with no row to reference it.
+      const res = await createLocal(shared, cookieB, csrfTokenB);
+      expect(res.status).toBe(409);
+      const body = await res.json<{ error: { code: string } }>();
+      expect(body.error.code).toBe('CONFLICT');
+    });
+
+    it('replays the recorded upload id when the same key is sent twice', async () => {
+      const key = 'key-local-replayed';
+      const first = await createLocal(key);
+      expect(first.status).toBe(201);
+      const firstData = await first.json<{ uploadId: string }>();
+
+      const second = await createLocal(key);
+      expect(second.status).toBe(200);
+      const secondData = await second.json<{ job: UploadJobView; uploadId: string }>();
+
+      // A second multipart upload here would be unreferenced and billable, so the retry has to hand
+      // back the one the row already points at.
+      expect(secondData.job.id).toBe(key);
+      expect(secondData.uploadId).toBe(firstData.uploadId);
     });
   });
 

@@ -41,12 +41,12 @@ https://example.com/file2.zip
     });
   });
 
-  it('identifies invalid non-HTTPS and malformed URLs', () => {
+  it('identifies malformed URLs and blocked hosts', () => {
     const text = `
 https://valid.com/video.mp4
-http://insecure.com/video.mp4
 not-a-url
 https://127.0.0.1/private.zip
+ftp://files.example.com/video.mp4
 `;
 
     const res = parseBatchText(text);
@@ -54,7 +54,23 @@ https://127.0.0.1/private.zip
     expect(res.items[0].url).toBe('https://valid.com/video.mp4');
     expect(res.invalidLines).toHaveLength(3);
     expect(res.invalidLines[0].line).toBe(3);
-    expect(res.invalidLines[0].reason).toContain('https');
+    expect(res.invalidLines[0].reason).toContain('Malformed');
+  });
+
+  it('upgrades http lines to https instead of discarding them', () => {
+    const text = `
+http://insecure.com/video.mp4
+https://insecure.com/video.mp4
+`;
+
+    const res = parseBatchText(text);
+    expect(res.invalidLines).toHaveLength(0);
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0].url).toBe('https://insecure.com/video.mp4');
+    // The upgrade happens before de-duplication, so the same file pasted under both
+    // schemes is one item rather than two uploads of the same video.
+    expect(res.duplicateLines).toHaveLength(1);
+    expect(res.duplicateLines[0].duplicateOf).toBe(2);
   });
 
   it('errors when exceeding MAX_BATCH_URLS (50)', () => {

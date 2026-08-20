@@ -3,9 +3,16 @@ import migration0001 from '../../migrations/0001_initial.sql?raw';
 import migration0002 from '../../migrations/0002_batch_imports.sql?raw';
 import migration0003 from '../../migrations/0003_preferences_columns.sql?raw';
 import migration0004 from '../../migrations/0004_seedr_credentials.sql?raw';
+import migration0005 from '../../migrations/0005_hls_recording.sql?raw';
 
 export async function applyMigrations(db: D1Database): Promise<void> {
-  const migrations = [migration0001, migration0002, migration0003, migration0004];
+  const migrations = [
+    migration0001,
+    migration0002,
+    migration0003,
+    migration0004,
+    migration0005,
+  ];
   for (const sql of migrations) {
     const statements = sql
       .split(';')

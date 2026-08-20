@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { UploadForm } from '../../src/web/uploads/UploadForm';
+import type { BrowserRelay } from '../../src/web/uploads/useBrowserRelay';
 
 function mockJsonResponse(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -9,6 +10,14 @@ function mockJsonResponse(data: any, status = 200) {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+// The Seedr tab never starts a browser relay, so an inert stub is enough here.
+const stubRelay: BrowserRelay = {
+  relayProgress: {},
+  isRelaying: false,
+  startRelay: async () => {},
+  cancelRelay: () => {},
+};
 
 describe('Seedr Magnet Upload Form UI', () => {
   beforeEach(() => {
@@ -42,7 +51,7 @@ describe('Seedr Magnet Upload Form UI', () => {
       return mockJsonResponse({});
     });
 
-    render(<UploadForm onJobCreated={() => {}} />);
+    render(<UploadForm onJobCreated={() => {}} relay={stubRelay} />);
 
     // Click Magnet / Torrent tab
     const magnetTab = screen.getByRole('button', { name: /Magnet \/ Torrent/i });
@@ -98,7 +107,7 @@ describe('Seedr Magnet Upload Form UI', () => {
       return mockJsonResponse({});
     });
 
-    render(<UploadForm onJobCreated={onJobCreatedMock} />);
+    render(<UploadForm onJobCreated={onJobCreatedMock} relay={stubRelay} />);
 
     // Switch to Magnet tab
     const magnetTab = screen.getByRole('button', { name: /Magnet \/ Torrent/i });
@@ -152,7 +161,7 @@ describe('Seedr Magnet Upload Form UI', () => {
       return mockJsonResponse({});
     });
 
-    render(<UploadForm onJobCreated={onJobCreatedMock} />);
+    render(<UploadForm onJobCreated={onJobCreatedMock} relay={stubRelay} />);
 
     // Switch to Magnet tab
     const magnetTab = screen.getByRole('button', { name: /Magnet \/ Torrent/i });

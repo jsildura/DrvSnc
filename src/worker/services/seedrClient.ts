@@ -7,7 +7,18 @@ const RESOURCE_URL = `${OAUTH_URL}/resource.php`;
 const TOKEN_URL = `${OAUTH_URL}/token.php`;
 const DEVICE_CODE_URL = `${BASE_API_URL}/device/code`;
 const DEVICE_AUTHORIZE_URL = `${BASE_API_URL}/device/authorize`;
+
+/**
+ * Seedr issues tokens per OAuth client, and `token.php` scopes a refresh grant to the client that
+ * minted the token — so these two are not interchangeable. Refreshing a password-grant token under
+ * the device client is rejected, which surfaces as "Seedr session expired. Please re-authorize" the
+ * first time a connection's access token runs out, on every account.
+ *
+ * `/login` (the only wired-up flow) uses the password client; the device-code helpers below are
+ * exported but currently unreachable from any route.
+ */
 const DEVICE_CLIENT_ID = 'seedr_xbmc';
+const PASSWORD_CLIENT_ID = 'seedr_chrome';
 
 export interface SeedrDeviceCodeResponse {
   device_code: string;
@@ -104,11 +115,17 @@ export async function pollSeedrDeviceAuthorization(
 
 /**
  * 3. Refresh expired Seedr token
+ *
+ * `clientId` must be the one the refresh token was issued to — see the constants above. It defaults
+ * to the password client because that is the only flow a connection can currently come from.
  */
-export async function refreshSeedrToken(refreshToken: string): Promise<SeedrTokenResponse> {
+export async function refreshSeedrToken(
+  refreshToken: string,
+  clientId: string = PASSWORD_CLIENT_ID
+): Promise<SeedrTokenResponse> {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
-    client_id: DEVICE_CLIENT_ID,
+    client_id: clientId,
     refresh_token: refreshToken,
   });
 
@@ -134,7 +151,7 @@ export async function loginWithSeedrPassword(
 ): Promise<SeedrTokenResponse> {
   const body = new URLSearchParams({
     grant_type: 'password',
-    client_id: 'seedr_chrome',
+    client_id: PASSWORD_CLIENT_ID,
     type: 'login',
     username,
     password,
@@ -294,9 +311,10 @@ async function callSeedrApi(
   let res = await doRequest(creds.accessToken);
 
   if (res.status === 401 && creds.refreshToken) {
-    // Attempt token refresh
+    // Attempt token refresh, under the client that issued the token — a mismatch here is rejected
+    // and turns a routine expiry into a forced re-login.
     try {
-      const refreshed = await refreshSeedrToken(creds.refreshToken);
+      const refreshed = await refreshSeedrToken(creds.refreshToken, PASSWORD_CLIENT_ID);
       await saveSeedrCredentials(
         env,
         userId,
@@ -304,6 +322,8 @@ async function callSeedrApi(
         refreshed.refresh_token || creds.refreshToken,
         creds.username
       );
+      // The 401's body is never read, and an unread body holds its connection open.
+      await res.body?.cancel().catch(() => undefined);
       res = await doRequest(refreshed.access_token);
     } catch (refreshErr) {
       throw new Error('Seedr session expired. Please re-authorize Seedr in Settings.');

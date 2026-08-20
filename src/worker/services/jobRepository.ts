@@ -1,6 +1,8 @@
 import { Env } from '../env';
 import { encryptSecret } from './crypto';
 import { redactSourceUrl } from './remoteUrlPolicy';
+import { deriveRemoteFilename } from './remoteFilename';
+import { abortMultipartUpload } from './r2Multipart';
 import {
   UploadJobView,
   CreateRemoteJobRequest,
@@ -34,18 +36,7 @@ export function redactUrl(urlStr: string): string {
 }
 
 function deriveFilenameFromUrl(urlStr: string): string {
-  try {
-    const url = new URL(urlStr);
-    const pathname = url.pathname;
-    const segments = pathname.split('/').filter(Boolean);
-    const last = segments[segments.length - 1];
-    if (last && last.includes('.')) {
-      return decodeURIComponent(last);
-    }
-  } catch {
-    // fallback
-  }
-  return 'remote-download';
+  return deriveRemoteFilename(urlStr);
 }
 
 export function normalizeJobRow(row: Record<string, unknown>): UploadJobView {
@@ -60,6 +51,7 @@ export function normalizeJobRow(row: Record<string, unknown>): UploadJobView {
     mimeType: String(row.mime_type || 'application/octet-stream'),
     destinationFolderId: row.destination_folder_id ? String(row.destination_folder_id) : null,
     destinationFolderName: row.destination_folder_name ? String(row.destination_folder_name) : null,
+    hlsDurationSeconds: row.hls_duration_seconds ? Number(row.hls_duration_seconds) : null,
     status: String(row.status) as UploadJobStatus,
     progressBytes: Number(row.progress_bytes || 0),
     attemptCount: Number(row.attempt_count || 1),
@@ -131,6 +123,42 @@ export function computeBatchView(
   };
 }
 
+/**
+ * Resolve an idempotency key to the job it already created, if any.
+ *
+ * `upload_jobs.id` *is* the key, so it is unique across the whole table rather than per user. Scoping
+ * this lookup by `user_id` — as the create paths used to — hides a row another account owns: the
+ * caller reads "no such job", inserts, and D1 raises a bare UNIQUE violation that surfaces as a 500.
+ * For the staging paths it is worse, because the multipart upload opened just before the insert is
+ * then left with no row to reference and nothing to abort it.
+ */
+export async function findJobForIdempotencyKey(
+  env: Env,
+  userId: string,
+  idempotencyKey: string
+): Promise<{ job: UploadJobView; r2UploadId: string | null } | null> {
+  const row = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ?')
+    .bind(idempotencyKey)
+    .first<Record<string, unknown>>();
+
+  if (!row) return null;
+  if (String(row.user_id) !== userId) {
+    throw new JobError('CONFLICT', 'Idempotency key in use', 409);
+  }
+
+  return {
+    job: normalizeJobRow(row),
+    r2UploadId: row.r2_upload_id ? String(row.r2_upload_id) : null,
+  };
+}
+
+/** Clamp a caller-supplied page size. A negative LIMIT is *unlimited* in SQLite, not empty. */
+function clampPageLimit(limit: number | undefined): number {
+  const parsed = Math.trunc(Number(limit));
+  if (!Number.isFinite(parsed) || parsed < 1) return 20;
+  return Math.min(parsed, 50);
+}
+
 export async function checkRateLimits(env: Env, userId: string, additionalSlots = 1): Promise<void> {
   // 1. Check daily job creation limit
   const dailyCountRow = await env.DB.prepare(
@@ -166,12 +194,10 @@ export async function createRemoteJob(
   data: CreateRemoteJobRequest
 ): Promise<{ job: UploadJobView; isExisting: boolean }> {
   // Check if idempotency key already exists for user
-  const existing = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ? AND user_id = ?')
-    .bind(idempotencyKey, userId)
-    .first<Record<string, unknown>>();
+  const existing = await findJobForIdempotencyKey(env, userId, idempotencyKey);
 
   if (existing) {
-    return { job: normalizeJobRow(existing), isExisting: true };
+    return { job: existing.job, isExisting: true };
   }
 
   await checkRateLimits(env, userId);
@@ -184,10 +210,10 @@ export async function createRemoteJob(
   await env.DB.prepare(
     `INSERT INTO upload_jobs (
        id, user_id, source_kind, source_url_redacted, source_url_encrypted, source_url_iv,
-       filename, file_size, mime_type, destination_folder_id, status, progress_bytes,
-       attempt_count, version, created_at, updated_at
+       filename, file_size, mime_type, destination_folder_id, hls_duration_seconds, status,
+       progress_bytes, attempt_count, version, created_at, updated_at
      )
-     VALUES (?, ?, 'remote', ?, ?, ?, ?, 0, 'application/octet-stream', ?, 'queued', 0, 1, 1, ?, ?)`
+     VALUES (?, ?, 'remote', ?, ?, ?, ?, 0, 'application/octet-stream', ?, ?, 'queued', 0, 1, 1, ?, ?)`
   )
     .bind(
       idempotencyKey,
@@ -197,6 +223,7 @@ export async function createRemoteJob(
       encrypted.iv,
       filename,
       data.folderId || null,
+      data.hlsDurationSeconds || null,
       now,
       now
     )
@@ -235,14 +262,18 @@ export async function createLocalJob(
   idempotencyKey: string,
   data: CreateLocalJobRequest,
   r2ObjectKey: string,
-  r2UploadId?: string
+  r2UploadId?: string,
+  /**
+   * Set only for a browser-relayed remote source. It doubles as the marker that tells the UI a
+   * `local` job came off a URL rather than a picked file — the token-bearing original never reaches
+   * the worker, so this redacted form is all there is to record.
+   */
+  sourceUrlRedacted?: string
 ): Promise<{ job: UploadJobView; isExisting: boolean }> {
-  const existing = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ? AND user_id = ?')
-    .bind(idempotencyKey, userId)
-    .first<Record<string, unknown>>();
+  const existing = await findJobForIdempotencyKey(env, userId, idempotencyKey);
 
   if (existing) {
-    return { job: normalizeJobRow(existing), isExisting: true };
+    return { job: existing.job, isExisting: true };
   }
 
   await checkRateLimits(env, userId);
@@ -250,15 +281,16 @@ export async function createLocalJob(
 
   await env.DB.prepare(
     `INSERT INTO upload_jobs (
-       id, user_id, source_kind, r2_object_key, r2_upload_id,
+       id, user_id, source_kind, source_url_redacted, r2_object_key, r2_upload_id,
        filename, file_size, mime_type, destination_folder_id, status, progress_bytes,
        attempt_count, version, created_at, updated_at
      )
-     VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, 'staging', 0, 1, 1, ?, ?)`
+     VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, 'staging', 0, 1, 1, ?, ?)`
   )
     .bind(
       idempotencyKey,
       userId,
+      sourceUrlRedacted || null,
       r2ObjectKey,
       r2UploadId || null,
       data.filename,
@@ -300,7 +332,7 @@ export async function listJobs(
     limit?: number;
   }
 ): Promise<{ jobs: UploadJobView[]; nextCursor: string | null; maxUpdatedAt: string | null }> {
-  const limit = Math.min(options?.limit || 20, 50);
+  const limit = clampPageLimit(options?.limit);
   const conditions: string[] = ['user_id = ?'];
   const params: (string | number)[] = [userId];
 
@@ -401,6 +433,15 @@ export async function requestCancel(
     )
       .bind(now, jobId)
       .run();
+
+    // A canceled staging job leaves a multipart upload half-written. R2 keeps those parts billable
+    // until the upload is explicitly abandoned, and a browser relay hits this path routinely — the
+    // source can refuse the fetch or the tab can close mid-stream.
+    const uploadId = row.r2_upload_id ? String(row.r2_upload_id) : null;
+    const objectKey = row.r2_object_key ? String(row.r2_object_key) : null;
+    if (uploadId && objectKey) {
+      await abortMultipartUpload(env, objectKey, uploadId);
+    }
   }
 
   return normalizeJobRow(updateRes || row);
@@ -789,7 +830,7 @@ export async function listBatches(
   userId: string,
   options?: { limit?: number; cursor?: string }
 ): Promise<{ batches: BatchView[]; nextCursor: string | null }> {
-  const limit = Math.min(options?.limit || 20, 50);
+  const limit = clampPageLimit(options?.limit);
   const conditions = ['user_id = ?'];
   const params: (string | number)[] = [userId];
 

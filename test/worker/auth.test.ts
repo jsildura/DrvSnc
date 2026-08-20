@@ -31,6 +31,16 @@ describe('Authentication, Sessions, CSRF, and Google OAuth Routes', () => {
       const state = url.searchParams.get('state');
       expect(state).toBeDefined();
 
+      // The state row alone only proves we issued the state, not that we issued it to this visitor.
+      // Without the cookie half, a callback URL captured from the attacker's own consent run logs
+      // the victim into the attacker's Google account.
+      const setCookie = res.headers.get('Set-Cookie') || '';
+      expect(setCookie).toContain(`gdu_oauth_state=${state}`);
+      expect(setCookie).toContain('HttpOnly');
+      // Google redirects back as a cross-site top-level navigation, which SameSite=Strict withholds.
+      expect(setCookie).toContain('SameSite=Lax');
+      expect(setCookie).toContain('Path=/api/v1/auth');
+
       // Check state in D1
       const savedState = await env.DB.prepare('SELECT * FROM oauth_states WHERE state = ?')
         .bind(state!)
@@ -42,12 +52,68 @@ describe('Authentication, Sessions, CSRF, and Google OAuth Routes', () => {
   });
 
   describe('GET /api/v1/auth/google/callback', () => {
-    it('rejects missing or invalid state', async () => {
+    it('rejects a state that was never issued or has expired', async () => {
+      // The cookie matches, so this gets past the browser-binding check and lands on the D1 lookup.
       const res = await SELF.fetch('https://example.com/api/v1/auth/google/callback?state=invalid&code=abc', {
         redirect: 'manual',
+        headers: { Cookie: 'gdu_oauth_state=invalid' },
       });
       expect(res.status).toBe(302);
       expect(res.headers.get('Location')).toContain('error=invalid_state');
+    });
+
+    // Login CSRF. An attacker runs the consent screen against their own Google account and keeps the
+    // resulting callback URL instead of following it. Server-side state is valid and unexpired, so a
+    // victim clicking that URL gets a session for the attacker's account — and every file they
+    // upload afterwards lands in the attacker's Drive. The state row proves we issued the state; the
+    // cookie is what proves we issued it to *this* browser.
+    it.each([
+      ['no state cookie', undefined],
+      ['a state cookie from a different flow', 'some-other-inflight-state'],
+    ])('refuses a callback carrying %s', async (_label, cookieState) => {
+      const testState = `state-unbound-${cookieState ?? 'absent'}`;
+      await env.DB.prepare(
+        `INSERT INTO oauth_states (state, code_verifier, redirect_uri, expires_at)
+         VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+10 minutes'))`
+      )
+        .bind(testState, 'verifier-unbound', 'https://example.com/api/v1/auth/google/callback')
+        .run();
+
+      const originalFetch = globalThis.fetch;
+      const googleCalls: string[] = [];
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (urlStr.includes('googleapis.com')) {
+          googleCalls.push(urlStr);
+          throw new Error('the code should never be exchanged for an unbound callback');
+        }
+        return originalFetch(input, init);
+      });
+
+      try {
+        const res = await SELF.fetch(
+          `https://example.com/api/v1/auth/google/callback?state=${testState}&code=attacker-auth-code`,
+          {
+            redirect: 'manual',
+            ...(cookieState ? { headers: { Cookie: `gdu_oauth_state=${cookieState}` } } : {}),
+          }
+        );
+
+        expect(res.status).toBe(302);
+        expect(res.headers.get('Location')).toContain('error=state_mismatch');
+        // Rejected before the exchange, so the attacker's code is never spent and no session exists.
+        expect(googleCalls).toEqual([]);
+        expect(res.headers.get('Set-Cookie') || '').not.toContain('gdu_session=');
+
+        // The row has to survive: a one-click bogus callback must not be able to cancel a login
+        // somebody else is halfway through.
+        const stillThere = await env.DB.prepare('SELECT state FROM oauth_states WHERE state = ?')
+          .bind(testState)
+          .first();
+        expect(stillThere).not.toBeNull();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     it('consumes state one-time and establishes session on valid OAuth exchange', async () => {
@@ -96,7 +162,7 @@ describe('Authentication, Sessions, CSRF, and Google OAuth Routes', () => {
       try {
         const res = await SELF.fetch(
           `https://example.com/api/v1/auth/google/callback?state=${testState}&code=mock-auth-code`,
-          { redirect: 'manual' }
+          { redirect: 'manual', headers: { Cookie: `gdu_oauth_state=${testState}` } }
         );
 
         expect(res.status).toBe(302);
@@ -108,6 +174,8 @@ describe('Authentication, Sessions, CSRF, and Google OAuth Routes', () => {
         expect(cookies).toContain('gdu_csrf=');
         expect(cookies).toContain('HttpOnly');
         expect(cookies).toContain('SameSite=Lax');
+        // The binding is spent along with the state row.
+        expect(cookies).toContain('gdu_oauth_state=;');
 
         // Verify state is consumed (deleted)
         const stateRecord = await env.DB.prepare('SELECT * FROM oauth_states WHERE state = ?')
@@ -198,7 +266,7 @@ describe('Authentication, Sessions, CSRF, and Google OAuth Routes', () => {
           {
             redirect: 'manual',
             headers: {
-              Cookie: `gdu_session=${oldRawToken}; gdu_csrf=csrf-old`,
+              Cookie: `gdu_session=${oldRawToken}; gdu_csrf=csrf-old; gdu_oauth_state=${testState}`,
             },
           }
         );

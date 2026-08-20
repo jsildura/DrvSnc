@@ -1,15 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { UploadJobView } from '../../shared/contracts';
 import { cancelJob, retryJob, deleteJobHistory } from '../api/jobs';
+import { BrowserRelay } from './useBrowserRelay';
+import { getRelaySource } from './relayUrlCache';
 
 interface JobListProps {
   jobs: UploadJobView[];
   onRefresh: () => void;
+  relay: BrowserRelay;
 }
 
-export function JobList({ jobs, onRefresh }: JobListProps) {
+/**
+ * How recently a job must have failed for the browser fallback to start on its own.
+ *
+ * The point of the fallback is to rescue the transfer the user just submitted and is watching. Older
+ * failures still get the button, because silently pulling gigabytes for something they have
+ * forgotten about is not a favour.
+ */
+const AUTO_RELAY_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * The failure a browser relay can actually fix: the source refused the worker. Signed links are
+ * commonly bound to the IP that created them, and only this tab has that IP.
+ */
+function isIpBoundFailure(job: UploadJobView): boolean {
+  return job.status === 'failed' && job.errorCode === 'REMOTE_ACCESS_DENIED';
+}
+
+export function JobList({ jobs, onRefresh, relay }: JobListProps) {
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  const autoAttempted = useRef<Set<string>>(new Set());
 
   const activeJobs = jobs.filter((j) =>
     ['staging', 'queued', 'fetching', 'uploading', 'cancel_requested'].includes(j.status)
@@ -20,44 +41,79 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
 
   // Every row action is a network call that can fail; without this the rejection
   // is unhandled and the user sees nothing happen at all.
-  const runAction = async (
-    id: string,
-    action: () => Promise<unknown>,
-    fallbackMessage: string
-  ): Promise<void> => {
-    setPendingIds((prev) => new Set(prev).add(id));
-    setActionErrors((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-
-    try {
-      await action();
-      onRefresh();
-    } catch (err) {
-      setActionErrors((prev) => ({
-        ...prev,
-        [id]: (err as Error).message || fallbackMessage,
-      }));
-    } finally {
-      setPendingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
+  const runAction = useCallback(
+    async (id: string, action: () => Promise<unknown>, fallbackMessage: string): Promise<void> => {
+      setPendingIds((prev) => new Set(prev).add(id));
+      setActionErrors((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
         return next;
       });
-    }
-  };
 
-  const handleCancel = (id: string) =>
-    runAction(id, () => cancelJob(id), 'Failed to cancel transfer');
+      try {
+        await action();
+        onRefresh();
+      } catch (err) {
+        setActionErrors((prev) => ({
+          ...prev,
+          [id]: (err as Error).message || fallbackMessage,
+        }));
+      } finally {
+        setPendingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [onRefresh]
+  );
+
+  const handleCancel = (id: string) => {
+    // Stops this tab's own fetch first, if it is the one moving the bytes; otherwise the job flips
+    // to canceled while the download carries on in the background.
+    relay.cancelRelay(id);
+    return runAction(id, () => cancelJob(id), 'Failed to cancel transfer');
+  };
 
   const handleRetry = (id: string) =>
     runAction(id, () => retryJob(id), 'Failed to retry transfer');
 
   const handleDelete = (id: string) =>
     runAction(id, () => deleteJobHistory(id), 'Failed to remove from history');
+
+  const relayFromBrowser = useCallback(
+    (job: UploadJobView, url: string) =>
+      runAction(
+        job.id,
+        () =>
+          relay.startRelay(url, {
+            filename: job.filename,
+            folderId: job.destinationFolderId || undefined,
+          }),
+        'Could not transfer this link from your browser'
+      ),
+    [runAction, relay]
+  );
+
+  // Auto-fallback. A link the worker was refused for being on the wrong IP is worth one attempt from
+  // this browser without making the user diagnose the 403 first — once per job, and only while the
+  // failure is fresh.
+  useEffect(() => {
+    for (const job of jobs) {
+      if (!isIpBoundFailure(job) || autoAttempted.current.has(job.id)) continue;
+
+      const failedAt = Date.parse(job.updatedAt);
+      if (isNaN(failedAt) || Date.now() - failedAt > AUTO_RELAY_WINDOW_MS) continue;
+
+      const url = getRelaySource(job.id);
+      if (!url) continue;
+
+      autoAttempted.current.add(job.id);
+      void relayFromBrowser(job, url);
+    }
+  }, [jobs, relayFromBrowser]);
 
   const getStatusBadge = (status: string) => {
     // `shrink-0` keeps the pill intact so the filename beside it truncates instead.
@@ -112,10 +168,19 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
           </h3>
           <div className="space-y-2.5 sm:space-y-3">
             {activeJobs.map((job) => {
+              // A staging relay's progress only exists in this tab — the worker sees nothing until
+              // the parts are assembled — so it is reported separately from `progressBytes`.
+              const staging = relay.relayProgress[job.id];
+              const transferred = staging ? staging.stagedBytes : job.progressBytes;
+              const total = staging && staging.totalBytes > 0 ? staging.totalBytes : job.fileSize;
               const progressPct =
-                job.fileSize > 0
-                  ? Math.min(100, Math.round((job.progressBytes / job.fileSize) * 100))
-                  : 0;
+                total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : 0;
+              const sourceLabel =
+                job.sourceKind === 'remote'
+                  ? 'Remote Download'
+                  : job.sourceUrlRedacted
+                    ? 'Browser Relay'
+                    : 'Local File';
 
               return (
                 <div
@@ -128,8 +193,7 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
                         {job.filename}
                       </p>
                       <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                        {job.sourceKind === 'remote' ? 'Remote Download' : 'Local File'} •{' '}
-                        {(job.fileSize / (1024 * 1024)).toFixed(2)} MiB
+                        {sourceLabel} • {(total / (1024 * 1024)).toFixed(2)} MiB
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
@@ -153,9 +217,10 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
                   <div className="space-y-1">
                     <div className="flex justify-between gap-2 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
                       <span className="truncate">
-                        {(job.progressBytes / (1024 * 1024)).toFixed(2)} MiB transferred
+                        {(transferred / (1024 * 1024)).toFixed(2)} MiB{' '}
+                        {staging ? 'staged from your browser' : 'transferred'}
                       </span>
-                      <span className="shrink-0">{progressPct}%</span>
+                      <span className="shrink-0">{total > 0 ? `${progressPct}%` : '—'}</span>
                     </div>
                     <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden">
                       <div
@@ -186,7 +251,12 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            {historyJobs.map((job) => (
+            {historyJobs.map((job) => {
+              // Only worth offering where it can help: the source refused the worker, and this
+              // browser still remembers the link that would let it try from the user's own IP.
+              const relayUrl = isIpBoundFailure(job) ? getRelaySource(job.id) : null;
+
+              return (
               <div
                 key={job.id}
                 className="p-3 sm:p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/80 shadow-xs flex items-center justify-between gap-2"
@@ -233,6 +303,20 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
                     </a>
                   )}
 
+                  {relayUrl && (
+                    <button
+                      type="button"
+                      disabled={pendingIds.has(job.id)}
+                      onClick={() => {
+                        void relayFromBrowser(job, relayUrl);
+                      }}
+                      title="Download it in this tab using your own IP address, then transfer it"
+                      className="py-1 px-2 sm:py-1.5 sm:px-3 rounded-lg sm:rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-[11px] sm:text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      {pendingIds.has(job.id) ? 'Relaying...' : 'Retry from my browser'}
+                    </button>
+                  )}
+
                   {job.status === 'failed' && (
                     <button
                       type="button"
@@ -261,7 +345,8 @@ export function JobList({ jobs, onRefresh }: JobListProps) {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -6,6 +6,20 @@ export const MAX_CONCURRENT_JOBS_PER_USER = 25;
 export const MAX_DAILY_JOBS_PER_USER = 100;
 export const MAX_BATCH_URLS = 50;
 
+/**
+ * Accepted shape of an `Idempotency-Key` header.
+ *
+ * The key is not just a dedupe token: it becomes the job's primary key, a segment of the R2 staging
+ * path, and the Workflow instance id. Restricting it to an opaque identifier keeps a caller from
+ * steering any of those with `/`, `..`, `?` or whitespace. A UUID — what every client here sends —
+ * fits comfortably.
+ */
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+export function isValidIdempotencyKey(key: string | undefined | null): key is string {
+  return typeof key === 'string' && IDEMPOTENCY_KEY_PATTERN.test(key);
+}
+
 // API Error Contract
 export const ApiErrorSchema = z.object({
   error: z.object({
@@ -82,6 +96,8 @@ export const UploadJobViewSchema = z.object({
   mimeType: z.string(),
   destinationFolderId: z.string().nullable().optional(),
   destinationFolderName: z.string().nullable().optional(),
+  /** Set only on remote jobs pointed at an HLS live stream; null means no cap applies. */
+  hlsDurationSeconds: z.number().int().nullable().optional(),
   status: z.enum(uploadJobStatuses),
   progressBytes: z.number().int().nonnegative(),
   attemptCount: z.number().int().min(1),
@@ -96,16 +112,26 @@ export const UploadJobViewSchema = z.object({
 
 export type UploadJobView = z.infer<typeof UploadJobViewSchema>;
 
+/**
+ * A remote source must be a web URL. `http://` is accepted because the SSRF policy upgrades it to
+ * `https://` before anything is stored or fetched, so a pasted plain-HTTP link works without the
+ * transfer ever running in plaintext. Schemes that cannot be upgraded — `file:`, `ftp:`, `blob:`,
+ * `data:` — stay out.
+ */
+const isWebUrl = (value: string): boolean =>
+  value.startsWith('https://') || value.startsWith('http://');
+
+const WEB_URL_MESSAGE = 'Remote upload source must be an http: or https: URL';
+
 export const CreateRemoteJobSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .max(2048)
-    .refine((val) => val.startsWith('https://'), {
-      message: 'Remote upload source must use https: protocol',
-    }),
+  url: z.string().url().max(2048).refine(isWebUrl, { message: WEB_URL_MESSAGE }),
   filename: z.string().min(1).max(255).optional(),
   folderId: z.string().max(128).optional(),
+  /**
+   * How long to record an HLS (`.m3u8`) live stream, which has no end of its own. Ignored for
+   * every other source, including VOD playlists — those transfer in full.
+   */
+  hlsDurationSeconds: z.number().int().min(60).max(3600).optional(),
 });
 
 export type CreateRemoteJobRequest = z.infer<typeof CreateRemoteJobSchema>;
@@ -115,13 +141,7 @@ export const batchStatuses = ['queued', 'running', 'completed', 'partial', 'fail
 export type BatchStatus = (typeof batchStatuses)[number];
 
 export const BatchItemInputSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .max(2048)
-    .refine((val) => val.startsWith('https://'), {
-      message: 'Remote upload source must use https: protocol',
-    }),
+  url: z.string().url().max(2048).refine(isWebUrl, { message: WEB_URL_MESSAGE }),
   filename: z.string().min(1).max(255).optional(),
 });
 
@@ -172,6 +192,26 @@ export const CreateLocalJobSchema = z.object({
 
 export type CreateLocalJobRequest = z.infer<typeof CreateLocalJobSchema>;
 
+/**
+ * A source the browser fetches itself and stages into R2, rather than one the worker downloads.
+ *
+ * Signed delivery links are often bound to the IP that created them, and the worker egresses from
+ * Cloudflare addresses — so the only machine that can read those bytes is the user's own. The tab
+ * does the fetching; from R2 onward the transfer is indistinguishable from a local upload.
+ *
+ * `fileSize` is `0` when the source sent no `Content-Length`, which is normal for a streamed
+ * response: the real total is reported at completion instead.
+ */
+export const CreateRelayJobSchema = z.object({
+  url: z.string().url().max(2048).refine(isWebUrl, { message: WEB_URL_MESSAGE }),
+  filename: z.string().min(1).max(255).optional(),
+  folderId: z.string().max(128).optional(),
+  fileSize: z.number().int().min(0).max(MAX_UPLOAD_SIZE_BYTES),
+  mimeType: z.string().min(1).max(128).optional(),
+});
+
+export type CreateRelayJobRequest = z.infer<typeof CreateRelayJobSchema>;
+
 export const UploadPartEtagSchema = z.object({
   partNumber: z.number().int().min(1),
   etag: z.string().min(1),
@@ -179,6 +219,12 @@ export const UploadPartEtagSchema = z.object({
 
 export const CompleteLocalJobSchema = z.object({
   parts: z.array(UploadPartEtagSchema).min(1),
+  /**
+   * Bytes the client actually staged, used only when R2 cannot confirm the assembled size. Drive's
+   * resumable session needs an exact total, and a relayed stream has no declared length to fall
+   * back on.
+   */
+  totalBytes: z.number().int().min(1).max(MAX_UPLOAD_SIZE_BYTES).optional(),
 });
 
 export type CompleteLocalJobRequest = z.infer<typeof CompleteLocalJobSchema>;

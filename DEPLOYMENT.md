@@ -19,9 +19,14 @@ wrangler r2 bucket create gdu-uploads-staging
 wrangler r2 bucket create gdu-uploads-prod
 
 # 3. Apply CORS Policy to R2 Buckets
-wrangler r2 bucket cors set gdu-uploads-staging --cors-file r2-cors.json
-wrangler r2 bucket cors set gdu-uploads-prod --cors-file r2-cors.json
+wrangler r2 bucket cors set gdu-uploads-staging --cors-file config/r2-cors.json
+wrangler r2 bucket cors set gdu-uploads-prod --cors-file config/r2-cors.json
 ```
+
+> `config/r2-cors.json` must list the exact deployed origin (`APP_ORIGIN` for each env in
+> `wrangler.jsonc`). Both browser staging paths — local file uploads and browser-relayed remote
+> links — `PUT` parts straight to R2 from the page, so a missing origin here surfaces as an opaque
+> network error on the first part upload with nothing useful in the Worker logs.
 
 ---
 

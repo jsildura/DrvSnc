@@ -2,11 +2,19 @@ import {
   UploadJobView,
   CreateRemoteJobRequest,
   CreateLocalJobRequest,
+  CreateRelayJobRequest,
   CreateBatchRequest,
   CreateBatchResponse,
   BatchView,
 } from '../../shared/contracts';
 import { apiRequest } from './client';
+
+export interface StagingSession {
+  job: UploadJobView;
+  partSize: number;
+  partCount: number;
+  uploadId: string;
+}
 
 export async function createRemoteUploadJob(
   data: CreateRemoteJobRequest,
@@ -24,18 +32,25 @@ export async function createRemoteUploadJob(
 export async function initiateLocalUploadJob(
   data: CreateLocalJobRequest,
   idempotencyKey = crypto.randomUUID()
-): Promise<{
-  job: UploadJobView;
-  partSize: number;
-  partCount: number;
-  uploadId: string;
-}> {
-  return apiRequest<{
-    job: UploadJobView;
-    partSize: number;
-    partCount: number;
-    uploadId: string;
-  }>('/api/v1/jobs/local', {
+): Promise<StagingSession> {
+  return apiRequest<StagingSession>('/api/v1/jobs/local', {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Open a staging session for a source the browser fetches itself. Same session shape as a local
+ * upload, because from R2 onward it is one.
+ */
+export async function createRelayUploadJob(
+  data: CreateRelayJobRequest,
+  idempotencyKey = crypto.randomUUID()
+): Promise<StagingSession> {
+  return apiRequest<StagingSession>('/api/v1/jobs/relay', {
     method: 'POST',
     headers: {
       'Idempotency-Key': idempotencyKey,
@@ -56,11 +71,13 @@ export async function getSignPartUrls(
 
 export async function completeLocalUploadJob(
   jobId: string,
-  parts: { partNumber: number; etag: string }[]
+  parts: { partNumber: number; etag: string }[],
+  /** Bytes actually staged. Required for a relayed stream, whose size was unknown at creation. */
+  totalBytes?: number
 ): Promise<UploadJobView> {
   return apiRequest<UploadJobView>(`/api/v1/jobs/${encodeURIComponent(jobId)}/complete`, {
     method: 'POST',
-    body: JSON.stringify({ parts }),
+    body: JSON.stringify(totalBytes ? { parts, totalBytes } : { parts }),
   });
 }
 

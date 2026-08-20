@@ -574,4 +574,191 @@ describe('DriveTransferWorkflow Background Transfer Runner', () => {
       }
     }
   );
+
+  it('labels a progressive MP4 from its filename when the delivery script says octet-stream', async () => {
+    const jobId = 'job-wf-progressive-mp4';
+    // What a token-protected delivery endpoint looks like once the filename has been recovered
+    // from its `file=` parameter: the path still names a PHP script, so nothing but the derived
+    // filename can tell Drive this is a video.
+    const sourceUrl =
+      'https://videos15.example.com/remote_control.php?file=R8cOl0GU.mp4&acctoken=ZWRmZGRi';
+    const totalSize = 4096;
+    const encUrl = await encryptSecret(sourceUrl, env.TOKEN_ENCRYPTION_KEY, userId);
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO upload_jobs (
+           id, user_id, source_kind, source_url_redacted, source_url_encrypted,
+           source_url_iv, filename, file_size, mime_type, status, version
+         ) VALUES (?, ?, 'remote', 'https://videos15.example.com/remote_control.php', ?, ?,
+                   'remote_control.mp4', 0, 'application/octet-stream', 'queued', 1)`
+      ).bind(jobId, userId, encUrl.ciphertext, encUrl.iv),
+      env.DB.prepare(
+        `INSERT INTO upload_attempts
+           (id, job_id, user_id, attempt_number, status)
+         VALUES (?, ?, ?, 1, 'queued')`
+      ).bind(`${jobId}-1`, jobId, userId),
+    ]);
+
+    const originalFetch = globalThis.fetch;
+    let sessionMetadata: { name?: string; mimeType?: string } = {};
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return new Response(
+          JSON.stringify({ access_token: 'mock-wf-access-token', expires_in: 3600 }),
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (urlStr === sourceUrl) {
+        // Pseudo-streaming endpoints describe every file the same unhelpful way.
+        const headers = {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(totalSize),
+          'Accept-Ranges': 'bytes',
+        };
+        if (init?.method === 'HEAD') {
+          return new Response(null, { status: 200, headers });
+        }
+        return new Response(new Uint8Array(totalSize), {
+          status: 206,
+          headers: { ...headers, 'Content-Range': `bytes 0-${totalSize - 1}/${totalSize}` },
+        });
+      }
+
+      if (urlStr.includes('upload_id=mock-resumable-session-123')) {
+        const cr = new Headers(init?.headers).get('Content-Range');
+        if (cr && cr.startsWith('bytes */')) {
+          return new Response(null, { status: 308, headers: { Range: 'bytes=0--1' } });
+        }
+        return new Response(
+          JSON.stringify({
+            id: 'drive-file-wf-mp4',
+            name: 'remote_control.mp4',
+            webViewLink: 'https://drive.google.com/file/d/drive-file-wf-mp4/view',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (urlStr.includes('googleapis.com/upload/drive/v3/files?uploadType=resumable')) {
+        sessionMetadata = JSON.parse(String(init?.body ?? '{}'));
+        return new Response(null, {
+          status: 200,
+          headers: {
+            Location: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=mock-resumable-session-123',
+          },
+        });
+      }
+
+      return originalFetch(input, init);
+    });
+
+    try {
+      const step = { do: async <T>(_name: string, fn: () => Promise<T>) => fn() };
+      await runDriveTransfer(env, { jobId, userId }, step);
+
+      // The type Drive was told at session creation is the one it stores, and the one that
+      // decides whether the file previews as video.
+      expect(sessionMetadata).toEqual({ name: 'remote_control.mp4', mimeType: 'video/mp4' });
+
+      const job = await env.DB.prepare(
+        'SELECT status, mime_type, file_size, progress_bytes, drive_file_id FROM upload_jobs WHERE id = ?'
+      ).bind(jobId).first<{
+        status: string;
+        mime_type: string;
+        file_size: number;
+        progress_bytes: number;
+        drive_file_id: string;
+      }>();
+
+      expect(job).toEqual({
+        status: 'completed',
+        mime_type: 'video/mp4',
+        file_size: totalSize,
+        progress_bytes: totalSize,
+        drive_file_id: 'drive-file-wf-mp4',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([401, 403])(
+    'fails with REMOTE_ACCESS_DENIED when a signed link is refused with %i',
+    async (status) => {
+      const jobId = `job-wf-denied-${status}`;
+      const sourceUrl = `https://videos15.example.com/remote_control.php?file=expired${status}.mp4`;
+      const encUrl = await encryptSecret(sourceUrl, env.TOKEN_ENCRYPTION_KEY, userId);
+
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO upload_jobs (
+             id, user_id, source_kind, source_url_redacted, source_url_encrypted,
+             source_url_iv, filename, file_size, mime_type, status, version
+           ) VALUES (?, ?, 'remote', 'https://videos15.example.com/remote_control.php', ?, ?,
+                     'remote_control.mp4', 0, 'application/octet-stream', 'queued', 1)`
+        ).bind(jobId, userId, encUrl.ciphertext, encUrl.iv),
+        env.DB.prepare(
+          `INSERT INTO upload_attempts
+             (id, job_id, user_id, attempt_number, status)
+           VALUES (?, ?, ?, 1, 'queued')`
+        ).bind(`${jobId}-1`, jobId, userId),
+      ]);
+
+      const originalFetch = globalThis.fetch;
+      const driveSessionRequests: string[] = [];
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (urlStr === sourceUrl) {
+          // An expired or IP-bound token is refused identically for HEAD and for a ranged GET,
+          // and the refusal carries a Content-Length that must not be read as the file's size.
+          return new Response('<html>Access denied</html>', {
+            status,
+            headers: { 'Content-Type': 'text/html' },
+          });
+        }
+
+        if (urlStr.includes('googleapis.com/upload/drive/v3/files')) {
+          driveSessionRequests.push(urlStr);
+        }
+
+        return originalFetch(input, init);
+      });
+
+      try {
+        const step = { do: async <T>(_name: string, fn: () => Promise<T>) => fn() };
+        await expect(runDriveTransfer(env, { jobId, userId }, step)).rejects.toMatchObject({
+          code: 'REMOTE_ACCESS_DENIED',
+        });
+
+        const job = await env.DB.prepare(
+          'SELECT status, error_code, error_message, file_size, drive_file_id FROM upload_jobs WHERE id = ?'
+        ).bind(jobId).first<{
+          status: string;
+          error_code: string;
+          error_message: string;
+          file_size: number;
+          drive_file_id: string | null;
+        }>();
+        const attempt = await env.DB.prepare(
+          'SELECT status, error_code FROM upload_attempts WHERE job_id = ?'
+        ).bind(jobId).first<{ status: string; error_code: string }>();
+
+        expect(job?.status).toBe('failed');
+        expect(job?.error_code).toBe('REMOTE_ACCESS_DENIED');
+        expect(job?.error_message).toContain(String(status));
+        // The length of the refusal page must not become the size of the upload.
+        expect(job?.file_size).toBe(0);
+        expect(job?.drive_file_id).toBeNull();
+        expect(attempt).toEqual({ status: 'failed', error_code: 'REMOTE_ACCESS_DENIED' });
+        expect(driveSessionRequests).toHaveLength(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  );
 });

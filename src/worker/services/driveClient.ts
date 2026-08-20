@@ -31,6 +31,21 @@ export function escapeQueryString(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+/**
+ * Drive answers a `pageSize` outside 1..1000 with an opaque 400, which reaches the user as
+ * "Failed to list folders" with nothing to act on. Every listing route parses this straight off the
+ * query string with `parseInt`, so `?pageSize=-5` and `?pageSize=5000` both get that far — the
+ * `|| fallback` idiom these call sites used only caught `NaN` and `0` because both are falsy.
+ *
+ * Same treatment `clampQueryInt`/`clampPageLimit` already give the job and batch listings.
+ */
+const DRIVE_MAX_PAGE_SIZE = 1000;
+
+function clampPageSize(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) return fallback;
+  return Math.min(Math.trunc(value), DRIVE_MAX_PAGE_SIZE);
+}
+
 // Google Workspace documents have no binary content, so `alt=media` never works on
 // them — they have to go through /export with one of these MIME types. Order matters:
 // the first entry is what we export as by default, and the rest are tried in turn if
@@ -250,7 +265,7 @@ export async function listItems(
 
     url.searchParams.set('q', qParts.join(' and '));
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(options?.pageSize || 50));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
     url.searchParams.set(
       'orderBy',
@@ -294,7 +309,7 @@ export async function listFolders(
 
     url.searchParams.set('q', qParts.join(' and '));
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(options?.pageSize || 100));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 100)));
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
     url.searchParams.set('orderBy', 'name');
 
@@ -390,7 +405,7 @@ export async function searchItems(
       `trashed = false and (name contains '${escaped}' or fullText contains '${escaped}')`
     );
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(options?.pageSize || 50));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
     const res = await fetch(url.toString(), {
@@ -422,7 +437,7 @@ export async function listShared(
     const url = new URL(`${DRIVE_API_BASE}/files`);
     url.searchParams.set('q', 'sharedWithMe = true and trashed = false');
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(options?.pageSize || 50));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
     url.searchParams.set('orderBy', 'sharedWithMeTime desc');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
@@ -455,7 +470,7 @@ export async function listTrash(
     const url = new URL(`${DRIVE_API_BASE}/files`);
     url.searchParams.set('q', 'trashed = true');
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(options?.pageSize || 50));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
     const res = await fetch(url.toString(), {
@@ -968,11 +983,18 @@ export async function queryResumableOffset(
   throw new Error(`Failed to query resumable upload offset: status ${res.status}`);
 }
 
+/**
+ * Upload one chunk of a resumable session.
+ *
+ * `totalSize` may be `'*'` for a source whose length is not known until it ends — an HLS
+ * recording, for one. Google requires that every chunk of such an upload be a multiple of
+ * 256 KiB until the final one, which is what declares the real total and commits the file.
+ */
 export async function uploadChunk(
   resumableUri: string,
   chunk: ArrayBuffer,
   startByte: number,
-  totalSize: number
+  totalSize: number | '*'
 ): Promise<Response> {
   const endByte = startByte + chunk.byteLength - 1;
   return await fetch(resumableUri, {
@@ -982,5 +1004,26 @@ export async function uploadChunk(
       'Content-Length': String(chunk.byteLength),
     },
     body: chunk,
+  });
+}
+
+/**
+ * Commit an unknown-size resumable upload that has no trailing bytes left to send.
+ *
+ * When a recording happens to end on an exact 256 KiB boundary every byte has already been
+ * accepted, so there is no final chunk left to carry the total. A `Content-Range` of
+ * `bytes` then a bare asterisk over the total, sent with an empty body, is how Google is told
+ * the stream is over and at what length to commit.
+ */
+export async function finalizeUnknownSizeUpload(
+  resumableUri: string,
+  totalSize: number
+): Promise<Response> {
+  return await fetch(resumableUri, {
+    method: 'PUT',
+    headers: {
+      'Content-Range': `bytes */${totalSize}`,
+      'Content-Length': '0',
+    },
   });
 }

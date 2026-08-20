@@ -48,13 +48,16 @@ describe('Contracts & DTO validation', () => {
       expect(valid.url).toBe('https://example.com/sample.mp4');
     });
 
-    it('rejects non-HTTPS URLs', () => {
-      expect(() =>
-        CreateRemoteJobSchema.parse({
-          url: 'http://example.com/insecure.mp4',
-        })
-      ).toThrow();
+    it('accepts an http URL, which the SSRF policy upgrades before anything is fetched', () => {
+      const valid = CreateRemoteJobSchema.parse({
+        url: 'http://videos15.example.com/remote_control.php?file=abc.mp4&acctoken=zzz',
+      });
+      expect(valid.url).toBe(
+        'http://videos15.example.com/remote_control.php?file=abc.mp4&acctoken=zzz'
+      );
+    });
 
+    it('rejects schemes that are not http or https', () => {
       expect(() =>
         CreateRemoteJobSchema.parse({
           url: 'file:///etc/passwd',
@@ -64,6 +67,12 @@ describe('Contracts & DTO validation', () => {
       expect(() =>
         CreateRemoteJobSchema.parse({
           url: 'blob:https://example.com/uuid',
+        })
+      ).toThrow();
+
+      expect(() =>
+        CreateRemoteJobSchema.parse({
+          url: 'ftp://example.com/file.zip',
         })
       ).toThrow();
     });

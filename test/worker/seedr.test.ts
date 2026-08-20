@@ -216,6 +216,58 @@ describe('Seedr Client Service', () => {
     );
   });
 
+  // The 401 → refresh → retry path had no coverage, which is how a client_id mismatch survived:
+  // every live connection is minted by the password grant, but the refresh named the device client.
+  // Seedr scopes a refresh grant to the client that issued the token, so the refresh was rejected
+  // and users were told to re-authorize the first time an access token ran out.
+  it('refreshes an expired token under the client that issued it, then retries', async () => {
+    await saveSeedrCredentials(
+      mockEnv,
+      'user-1',
+      'expired-access',
+      'live-refresh',
+      'seedr@example.com'
+    );
+
+    const refreshBodies: string[] = [];
+    const apiTokens: string[] = [];
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url, opts: any) => {
+      const body = opts?.body?.toString() || '';
+
+      if (String(url).includes('token.php')) {
+        refreshBodies.push(body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'fresh-access', refresh_token: 'fresh-refresh' }),
+        };
+      }
+
+      const token = new URLSearchParams(body).get('access_token') || '';
+      apiTokens.push(token);
+      if (token === 'expired-access') {
+        return seedrResponse({ error: 'invalid_token' }, { ok: false, status: 401 });
+      }
+      return seedrResponse({ result: true, user_torrent_id: 1234 });
+    });
+
+    const result = await addSeedrMagnet(mockEnv, 'user-1', 'magnet:?xt=urn:btih:abc');
+    expect(result.user_torrent_id).toBe(1234);
+
+    expect(refreshBodies).toHaveLength(1);
+    const refresh = new URLSearchParams(refreshBodies[0]);
+    expect(refresh.get('grant_type')).toBe('refresh_token');
+    expect(refresh.get('client_id')).toBe('seedr_chrome');
+    expect(refresh.get('refresh_token')).toBe('live-refresh');
+
+    // The retry carries the new token, and both halves are persisted for the next call.
+    expect(apiTokens).toEqual(['expired-access', 'fresh-access']);
+    const stored = await getSeedrCredentials(mockEnv, 'user-1');
+    expect(stored?.accessToken).toBe('fresh-access');
+    expect(stored?.refreshToken).toBe('fresh-refresh');
+  });
+
   it('deletes a Seedr item with an unquoted id and reports upstream failures', async () => {
     await saveSeedrCredentials(mockEnv, 'user-1', 'valid-access-token');
 

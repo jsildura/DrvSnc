@@ -96,22 +96,47 @@ describe('Durable Upload Job API (/api/v1/jobs)', () => {
       expect(err.error.code).toBe('INVALID_REQUEST');
     });
 
-    it('rejects non-HTTPS URLs', async () => {
+    it('rejects URL schemes that cannot be upgraded to https', async () => {
       const res = await SELF.fetch('https://example.com/api/v1/jobs/remote', {
         method: 'POST',
         headers: {
           Cookie: cookieA,
           'X-CSRF-Token': csrfTokenA,
-          'Idempotency-Key': 'key-http-fail',
+          'Idempotency-Key': 'key-scheme-fail',
           Origin: 'https://example.com',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          url: 'http://example.com/insecure.iso',
+          url: 'ftp://example.com/insecure.iso',
         }),
       });
 
       expect(res.status).toBe(400);
+    });
+
+    it('accepts a token-protected progressive MP4 over http', async () => {
+      // A pasted delivery link: plain http, the real name hidden behind a signed `file=` token,
+      // and a path that names a PHP script rather than the video.
+      const token = `${'R8cOl0GU0HGcB0AC3ezd'.repeat(5)}_uFD2K9m2SW`;
+      const res = await SELF.fetch('https://example.com/api/v1/jobs/remote', {
+        method: 'POST',
+        headers: {
+          Cookie: cookieA,
+          'X-CSRF-Token': csrfTokenA,
+          'Idempotency-Key': 'key-progressive-mp4',
+          Origin: 'https://example.com',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          url: `http://videos15.example.com/remote_control.php?file=${token}.mp4&acctoken=ZWRmZGRi`,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const job = await res.json<UploadJobView>();
+      expect(job.filename).toBe('remote_control.mp4');
+      // Stored as https, and with the signed token stripped out of the loggable form.
+      expect(job.sourceUrlRedacted).toBe('https://videos15.example.com/remote_control.php');
     });
 
     it('creates remote job and returns idempotent result on retry', async () => {

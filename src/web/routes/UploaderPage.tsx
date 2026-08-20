@@ -4,6 +4,7 @@ import { listJobs, listBatches } from '../api/jobs';
 import { UploadForm } from '../uploads/UploadForm';
 import { JobList } from '../uploads/JobList';
 import { BatchProgress } from '../uploads/BatchProgress';
+import { useBrowserRelay } from '../uploads/useBrowserRelay';
 
 export function UploaderPage() {
   const [jobs, setJobs] = useState<UploadJobView[]>([]);
@@ -21,6 +22,9 @@ export function UploaderPage() {
       // Ignore network polling glitches
     }
   }, []);
+
+  // A relay is driven by this tab, and either child can start one, so it is owned here.
+  const relay = useBrowserRelay(fetchData);
 
   useEffect(() => {
     fetchData();
@@ -53,7 +57,7 @@ export function UploaderPage() {
 
       {/* Upload creation form */}
       <div className="relative z-20">
-        <UploadForm onJobCreated={fetchData} />
+        <UploadForm onJobCreated={fetchData} relay={relay} />
       </div>
 
       {/* Active Batches Section */}
@@ -72,7 +76,7 @@ export function UploaderPage() {
 
       {/* Uploads and History List */}
       <div className="relative z-0">
-        <JobList jobs={standaloneJobs} onRefresh={fetchData} />
+        <JobList jobs={standaloneJobs} onRefresh={fetchData} relay={relay} />
       </div>
     </div>
   );

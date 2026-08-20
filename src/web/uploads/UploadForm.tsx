@@ -7,13 +7,26 @@ import {
 } from '../api/jobs';
 import { uploadFileMultipart } from './multipartUpload';
 import { validateRemoteUrl } from '../../worker/services/remoteUrlPolicy';
+import { isHlsUrl } from '../../worker/services/hlsPlaylist';
 import { FolderPicker } from '../components/FolderPicker';
 import { BatchImporter } from './BatchImporter';
 import { SeedrMagnetForm } from './SeedrMagnetForm';
+import { BrowserRelay } from './useBrowserRelay';
+import { rememberRelaySource } from './relayUrlCache';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GiB
 
-export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
+/** Recording lengths offered for a live HLS stream, which has no end of its own. */
+const HLS_DURATION_CHOICES = [1, 5, 10, 30, 60];
+const DEFAULT_HLS_DURATION_MINUTES = 10;
+
+export function UploadForm({
+  onJobCreated,
+  relay,
+}: {
+  onJobCreated: () => void;
+  relay: BrowserRelay;
+}) {
   const [activeMode, setActiveMode] = useState<'local' | 'remote' | 'batch' | 'magnet'>('local');
 
   // Local upload state
@@ -32,6 +45,18 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
   const [remoteFolderName, setRemoteFolderName] = useState('My Drive (Root)');
   const [isSubmittingRemote, setIsSubmittingRemote] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [hlsDurationMinutes, setHlsDurationMinutes] = useState(DEFAULT_HLS_DURATION_MINUTES);
+  const [useBrowserFetch, setUseBrowserFetch] = useState(false);
+  const [relayStaged, setRelayStaged] = useState<{ bytes: number; total: number } | null>(null);
+
+  // A playlist URL points at an index of segments rather than a file, so it gets a recording
+  // length instead of a plain download.
+  const remoteIsPlaylist = isHlsUrl(remoteUrl.trim());
+
+  // A playlist is fetched segment by segment by the worker, which the relay has no equivalent of, so
+  // the two options are mutually exclusive.
+  const relayAvailable = !remoteIsPlaylist;
+  const relayActive = useBrowserFetch && relayAvailable;
 
   const handleFileChange = (file: File | null) => {
     setLocalError(null);
@@ -96,11 +121,28 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
 
     try {
       setIsSubmittingRemote(true);
-      await createRemoteUploadJob({
-        url: remoteUrl.trim(),
-        filename: customFilename.trim() || undefined,
-        folderId: remoteFolderId || undefined,
-      });
+
+      if (relayActive) {
+        setRelayStaged({ bytes: 0, total: 0 });
+        await relay.startRelay(validation.normalizedUrl!, {
+          filename: customFilename.trim() || undefined,
+          folderId: remoteFolderId || undefined,
+          onProgress: (bytes, total) => setRelayStaged({ bytes, total }),
+        });
+      } else {
+        const job = await createRemoteUploadJob({
+          // The normalized form, so a pasted http:// link is submitted as the https:// URL the
+          // worker will actually fetch rather than being upgraded again server-side.
+          url: validation.normalizedUrl!,
+          filename: customFilename.trim() || undefined,
+          folderId: remoteFolderId || undefined,
+          hlsDurationSeconds: remoteIsPlaylist ? hlsDurationMinutes * 60 : undefined,
+        });
+
+        // If the worker gets refused for being on the wrong IP, retrying from this browser needs the
+        // token-bearing URL back — and by then the only copy left is this one.
+        rememberRelaySource(job.id, validation.normalizedUrl!);
+      }
 
       setRemoteUrl('');
       setCustomFilename('');
@@ -111,6 +153,7 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
       setRemoteError((err as Error).message || 'Failed to submit remote upload');
     } finally {
       setIsSubmittingRemote(false);
+      setRelayStaged(null);
     }
   };
 
@@ -298,8 +341,85 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
             />
           </div>
 
+          {remoteIsPlaylist && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Record Duration
+              </label>
+              <select
+                value={hlsDurationMinutes}
+                onChange={(e) => setHlsDurationMinutes(Number(e.target.value))}
+                className="w-full text-xs p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-slate-800/50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {HLS_DURATION_CHOICES.map((minutes) => (
+                  <option key={minutes} value={minutes}>
+                    {minutes === 60 ? '1 hour' : `${minutes} minute${minutes === 1 ? '' : 's'}`}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                This is a video stream (.m3u8). A live stream is recorded from now for the length
+                you pick; an on-demand playlist ignores this and transfers in full. The result is a
+                single video file, not the playlist.
+              </p>
+            </div>
+          )}
+
           {remoteError && (
             <p className="text-xs text-rose-500 font-medium">{remoteError}</p>
+          )}
+
+          {/* Browser-relayed fetch */}
+          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700/60 bg-slate-50/60 dark:bg-slate-800/40 space-y-1.5">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={relayActive}
+                disabled={!relayAvailable || isSubmittingRemote}
+                onChange={(e) => setUseBrowserFetch(e.target.checked)}
+                className="mt-0.5 w-4 h-4 shrink-0 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+              />
+              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Fetch from my browser (for links tied to your IP)
+              </span>
+            </label>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-[26px]">
+              {relayAvailable
+                ? 'Your browser downloads the file and uploads it to staging, so the link sees your ' +
+                  'IP address instead of the server’s. Keep this tab open until staging ' +
+                  'finishes. Hosts that block cross-origin reads cannot be relayed this way.'
+                : 'Not available for .m3u8 streams — a playlist is recorded segment by segment ' +
+                  'on the server.'}
+            </p>
+          </div>
+
+          {relayStaged && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+                <span>
+                  Staging from your browser — {(relayStaged.bytes / (1024 * 1024)).toFixed(2)} MiB
+                </span>
+                <span>
+                  {relayStaged.total > 0
+                    ? `${Math.round((relayStaged.bytes / relayStaged.total) * 100)}%`
+                    : 'size unknown'}
+                </span>
+              </div>
+              <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+                <div
+                  className={
+                    relayStaged.total > 0
+                      ? 'bg-indigo-600 h-2 rounded-full transition-all duration-300'
+                      : 'bg-indigo-600/60 h-2 rounded-full animate-pulse w-1/3'
+                  }
+                  style={
+                    relayStaged.total > 0
+                      ? { width: `${Math.min(100, Math.round((relayStaged.bytes / relayStaged.total) * 100))}%` }
+                      : undefined
+                  }
+                />
+              </div>
+            </div>
           )}
 
           {/* Destination Folder Selector */}
@@ -317,7 +437,13 @@ export function UploadForm({ onJobCreated }: { onJobCreated: () => void }) {
             disabled={!remoteUrl.trim() || isSubmittingRemote}
             className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium shadow-md shadow-indigo-500/20 transition-colors"
           >
-            {isSubmittingRemote ? 'Starting Transfer...' : 'Start Remote Transfer'}
+            {isSubmittingRemote
+              ? relayActive
+                ? 'Staging in Browser...'
+                : 'Starting Transfer...'
+              : relayActive
+                ? 'Fetch in Browser & Transfer'
+                : 'Start Remote Transfer'}
           </button>
         </form>
       )}

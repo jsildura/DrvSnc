@@ -107,7 +107,7 @@ describe('Batch Remote Upload API (/api/v1/jobs/batch)', () => {
     expect(data.error.code).toBe('INVALID_REQUEST');
   });
 
-  it('rejects invalid/non-HTTPS URLs', async () => {
+  it('rejects a batch containing a scheme that cannot be upgraded to https', async () => {
     const res = await SELF.fetch('https://uploader.local/api/v1/jobs/batch', {
       method: 'POST',
       headers: {
@@ -119,7 +119,7 @@ describe('Batch Remote Upload API (/api/v1/jobs/batch)', () => {
       body: JSON.stringify({
         items: [
           { url: 'https://example.com/file1.mp4' },
-          { url: 'http://insecure.com/file2.mp4' },
+          { url: 'ftp://insecure.com/file2.mp4' },
         ],
       }),
     });
