@@ -478,6 +478,7 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
   const user = c.get('user')!;
   const fileId = c.req.param('fileId');
   const requestedExportMime = c.req.query('exportMimeType');
+  const clientRange = c.req.header('range');
 
   try {
     let upstreamRes: Response;
@@ -486,7 +487,7 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
       upstreamRes = await exportFile(c.env, user.id, fileId, requestedExportMime);
     } else {
       try {
-        upstreamRes = await downloadFile(c.env, user.id, fileId);
+        upstreamRes = await downloadFile(c.env, user.id, fileId, clientRange);
       } catch (dlErr) {
         // Google answers alt=media on a Workspace file with 403 fileNotDownloadable
         // (and occasionally 400). Anything else — 404, 401, 429, 5xx — is a real
@@ -512,9 +513,13 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
     const headers = new Headers();
     const contentType = upstreamRes.headers.get('Content-Type') || (requestedExportMime || 'application/octet-stream');
     headers.set('Content-Type', contentType);
+    headers.set('Accept-Ranges', 'bytes');
 
     const contentLength = upstreamRes.headers.get('Content-Length');
     if (contentLength) headers.set('Content-Length', contentLength);
+
+    const contentRange = upstreamRes.headers.get('Content-Range');
+    if (contentRange) headers.set('Content-Range', contentRange);
 
     const contentDisposition = upstreamRes.headers.get('Content-Disposition');
     if (contentDisposition) {

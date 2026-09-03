@@ -3,6 +3,7 @@ import { AppProvider, useApp, AppTab } from './state/AppProvider';
 import { AuthGate } from './auth/AuthGate';
 import { UploaderPage } from './routes/UploaderPage';
 import { DrivePage } from './routes/DrivePage';
+import { ConverterPage } from './routes/ConverterPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { LegalModal, LegalDocType } from './components/LegalModal';
 
@@ -27,6 +28,15 @@ function DashboardShell() {
       icon: ({ className }) => (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'converter',
+      label: 'Converter',
+      icon: ({ className }) => (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
         </svg>
       ),
     },
@@ -128,6 +138,7 @@ function DashboardShell() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-4 sm:py-8 mb-16 md:mb-0">
         {activeTab === 'uploader' && <UploaderPage />}
         {activeTab === 'drive' && <DrivePage />}
+        {activeTab === 'converter' && <ConverterPage />}
         {activeTab === 'settings' && <SettingsPage />}
 
         {/* Global Footer */}
@@ -167,7 +178,7 @@ function DashboardShell() {
 
       {/* Mobile Bottom Navigation Bar */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
-        <div className="grid grid-cols-3 h-16">
+        <div className="grid grid-cols-4 h-16">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;

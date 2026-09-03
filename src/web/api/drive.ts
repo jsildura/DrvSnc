@@ -144,3 +144,14 @@ export function getDownloadUrl(fileId: string, exportMimeType?: string): string 
   const base = `/api/v1/drive/files/${encodeURIComponent(fileId)}/download`;
   return exportMimeType ? `${base}?exportMimeType=${encodeURIComponent(exportMimeType)}` : base;
 }
+
+export async function searchDriveItems(
+  query: string,
+  options?: { pageToken?: string; pageSize?: number }
+): Promise<DrivePage> {
+  const params = new URLSearchParams();
+  params.set('q', query);
+  if (options?.pageToken) params.set('pageToken', options.pageToken);
+  if (options?.pageSize) params.set('pageSize', String(options.pageSize));
+  return apiRequest<DrivePage>(`/api/v1/drive/search?${params.toString()}`);
+}

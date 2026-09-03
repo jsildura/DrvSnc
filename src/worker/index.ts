@@ -9,6 +9,7 @@ import { preferencesRoutes } from './routes/preferences';
 import { driveRoutes } from './routes/drive';
 import { jobRoutes } from './routes/jobs';
 import { seedrRoutes } from './routes/seedr';
+import { converterRoutes } from './routes/converter';
 import { handleScheduledCleanup } from './scheduled/cleanup';
 import { AccountView } from '../shared/contracts';
 
@@ -32,7 +33,7 @@ app.use('*', async (c, next) => {
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   c.header(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com wss://*.video-converter.com https://*.video-converter.com; frame-src 'self' https://drive.google.com https://docs.google.com blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
   );
 
   if (c.req.url.startsWith('https://')) {
@@ -68,6 +69,7 @@ app.route('/api/v1/preferences', preferencesRoutes);
 app.route('/api/v1/drive', driveRoutes);
 app.route('/api/v1/jobs', jobRoutes);
 app.route('/api/v1/seedr', seedrRoutes);
+app.route('/api/v1/converter', converterRoutes);
 
 // Active session profile route
 app.get('/api/v1/session', requireSession, (c) => {

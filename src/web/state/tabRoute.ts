@@ -5,7 +5,7 @@
  * its own, and so callers decide when to touch `history`.
  */
 
-export type AppTab = 'uploader' | 'drive' | 'settings';
+export type AppTab = 'uploader' | 'drive' | 'converter' | 'settings';
 
 /** Shown while signed out. Matches the path the worker already redirects to on
  *  auth failure (see src/worker/routes/auth.ts). */
@@ -18,6 +18,7 @@ export const LOGIN_PATH = '/login';
 export const TAB_PATHS: Record<AppTab, string> = {
   uploader: '/uploads',
   drive: '/drive',
+  converter: '/converter',
   settings: '/settings',
 };
 
@@ -26,6 +27,7 @@ const PATH_TO_TAB = new Map<string, AppTab>([
   // The tab id is `uploader`, so accept that spelling as an alias rather than 404-ing to the default.
   ['/uploader', 'uploader'],
   ['/drive', 'drive'],
+  ['/converter', 'converter'],
   ['/settings', 'settings'],
 ]);
 

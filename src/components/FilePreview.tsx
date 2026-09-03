@@ -26,9 +26,6 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import VolumeOffIcon from '@mui/icons-material/VolumeOff';
-import FullscreenIcon from '@mui/icons-material/Fullscreen';
-import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
-import PictureInPictureAltIcon from '@mui/icons-material/PictureInPictureAlt';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import SearchIcon from '@mui/icons-material/Search';
@@ -290,6 +287,9 @@ function getGoogleAppInfo(fileId: string, previewKind: PreviewKind, mimeType?: s
   return null;
 }
 
+const BASE_VIDEO_WIDTH = 768;
+const BASE_VIDEO_HEIGHT = 504;
+
 export default function FilePreview({
   open,
   onClose,
@@ -389,6 +389,24 @@ export default function FilePreview({
   const [docFitWidth, setDocFitWidth] = useState(false);
   const docScrollRef = useRef<HTMLDivElement | null>(null);
   const docContentRef = useRef<HTMLDivElement | null>(null);
+  const mainStageRef = useRef<HTMLElement | null>(null);
+
+  // Attach non-passive wheel listener for smooth image zooming without preventDefault errors
+  useEffect(() => {
+    const el = mainStageRef.current;
+    if (!el || previewKind !== 'image') return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.15 : -0.15;
+      setZoom((prev) => Math.min(5, Math.max(0.25, prev + delta)));
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, [previewKind]);
 
   // PowerPoint state. `pptxFallback` swaps Drive's embedded viewer for the slide
   // thumbnail Drive already generated.
@@ -405,14 +423,108 @@ export default function FilePreview({
 
   // Video state
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
+  const [videoContainerWidth, setVideoContainerWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 0
+  );
+
+  useEffect(() => {
+    if (!open || previewKind !== 'video') return;
+    const el = videoContainerRef.current;
+    if (!el) return;
+
+    const updateWidth = () => {
+      if (el.clientWidth > 0) setVideoContainerWidth(el.clientWidth);
+    };
+    updateWidth();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0) {
+          setVideoContainerWidth(entry.contentRect.width);
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, previewKind]);
+
+  // Track fullscreen state and window dimensions for responsive video scaling
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [windowDimensions, setWindowDimensions] = useState<{ width: number; height: number }>(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 0,
+    height: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowDimensions({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const fsEl =
+        document.fullscreenElement ||
+        (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement ||
+        (document as unknown as { mozFullScreenElement?: Element }).mozFullScreenElement ||
+        (document as unknown as { msFullscreenElement?: Element }).msFullscreenElement;
+      setIsFullscreen(Boolean(fsEl));
+      if (typeof window !== 'undefined') {
+        setWindowDimensions({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+    document.addEventListener('MSFullscreenChange', handleFsChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('MSFullscreenChange', handleFsChange);
+    };
+  }, []);
+
+  // Compute active dimensions to always present a >=768px landscape layout to Google Drive
+  const isPortrait = windowDimensions.height > windowDimensions.width;
+
+  let activeWidth: number;
+  let topOffset = 0;
+  let leftOffset = 0;
+
+  if (isFullscreen) {
+    if (isPortrait) {
+      activeWidth = windowDimensions.width;
+      const computedScale = activeWidth > 0 ? activeWidth / BASE_VIDEO_WIDTH : 1;
+      const activeHeight = Math.round(BASE_VIDEO_HEIGHT * computedScale);
+      topOffset = Math.max(0, Math.round((windowDimensions.height - activeHeight) / 2));
+    } else {
+      const maxHeight = windowDimensions.height;
+      const fitWidth = Math.round(maxHeight * (BASE_VIDEO_WIDTH / BASE_VIDEO_HEIGHT));
+      activeWidth = Math.min(windowDimensions.width, fitWidth);
+      const computedScale = activeWidth > 0 ? activeWidth / BASE_VIDEO_WIDTH : 1;
+      const activeHeight = Math.round(BASE_VIDEO_HEIGHT * computedScale);
+      leftOffset = Math.max(0, Math.round((windowDimensions.width - activeWidth) / 2));
+      topOffset = Math.max(0, Math.round((windowDimensions.height - activeHeight) / 2));
+    }
+  } else {
+    activeWidth = videoContainerWidth;
+  }
+
+  const isScaling = activeWidth > 0 && activeWidth < BASE_VIDEO_WIDTH;
+  const videoScale = isScaling ? activeWidth / BASE_VIDEO_WIDTH : 1;
 
   // Audio state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -454,7 +566,6 @@ export default function FilePreview({
     setSheetNames([]);
     setSheetGrid([]);
     setActiveSheetIndex(0);
-    setIsPlaying(false);
     setIsAudioPlaying(false);
     setActiveTab('preview');
   }, [fileId]);
@@ -617,7 +728,18 @@ export default function FilePreview({
       };
     }
 
-    // 7. Anything without its own loader (office, unsupported, video, audio) — those
+    // 7. Video — rendered by Drive in a cross-origin iframe (or direct video player).
+    if (previewKind === 'video') {
+      const timer = setTimeout(() => {
+        if (isSubscribed) setLoading(false);
+      }, 3000);
+      return () => {
+        isSubscribed = false;
+        clearTimeout(timer);
+      };
+    }
+
+    // 8. Anything without its own loader (office, unsupported, audio) — those
     // render immediately, so just clear the overlay.
     const timer = setTimeout(() => setLoading(false), 800);
     return () => {
@@ -787,66 +909,7 @@ export default function FilePreview({
     setIsPanning(false);
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    if (previewKind === 'image') {
-      e.preventDefault();
-      const delta = e.deltaY < 0 ? 0.15 : -0.15;
-      setZoom((prev) => Math.min(5, Math.max(0.25, prev + delta)));
-    }
-  };
 
-  // Video controls
-  const togglePlayVideo = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play();
-      setIsPlaying(true);
-    } else {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    }
-  };
-
-  const handleVideoSeek = (_: Event, value: number | number[]) => {
-    const time = value as number;
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-      setCurrentTime(time);
-    }
-  };
-
-  const handleVideoVolume = (_: Event, value: number | number[]) => {
-    const vol = (value as number) / 100;
-    if (videoRef.current) {
-      videoRef.current.volume = vol;
-      setVolume(vol);
-      setIsMuted(vol === 0);
-    }
-  };
-
-  const toggleVideoMute = () => {
-    if (!videoRef.current) return;
-    videoRef.current.muted = !isMuted;
-    setIsMuted(!isMuted);
-  };
-
-  const handleSpeedChange = (rate: number) => {
-    if (videoRef.current) {
-      videoRef.current.playbackRate = rate;
-      setPlaybackRate(rate);
-    }
-  };
-
-  const toggleVideoFullscreen = () => {
-    if (!videoContainerRef.current) return;
-    if (!document.fullscreenElement) {
-      videoContainerRef.current.requestFullscreen().catch(() => {});
-      setIsVideoFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsVideoFullscreen(false);
-    }
-  };
 
   // Audio controls
   const togglePlayAudio = () => {
@@ -935,9 +998,14 @@ export default function FilePreview({
   };
 
   const formatTime = (secs: number) => {
-    if (isNaN(secs) || secs === 0) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
+    if (isNaN(secs) || secs <= 0) return '0:00';
+    const totalSecs = Math.floor(secs);
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    if (h > 0) {
+      return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
@@ -1230,13 +1298,13 @@ export default function FilePreview({
       {/* ========================================================================= */}
       <div className="relative flex-1 flex overflow-hidden bg-slate-100 dark:bg-slate-950">
         {/* Navigation Chevrons */}
-        {hasMultipleFiles && (
+        {hasMultipleFiles && previewKind !== 'video' && previewKind !== 'audio' && (
           <>
             <button
               onClick={handlePrev}
               title="Previous file (←)"
               aria-label="Previous file"
-              className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+              className="hidden sm:flex absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
             >
               <NavigateBeforeIcon fontSize="medium" />
             </button>
@@ -1245,7 +1313,7 @@ export default function FilePreview({
               onClick={handleNext}
               title="Next file (→)"
               aria-label="Next file"
-              className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 flex items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
+              className="hidden sm:flex absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200 shadow-xl dark:bg-slate-900/80 dark:hover:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:border-slate-700/80 items-center justify-center backdrop-blur-md transition-all hover:scale-110 active:scale-95"
               style={{ right: showInfo ? '340px' : '16px' }}
             >
               <NavigateNextIcon fontSize="medium" />
@@ -1255,11 +1323,11 @@ export default function FilePreview({
 
         {/* Central Viewport Content Area */}
         <main
+          ref={mainStageRef}
           className="flex-1 relative flex items-center justify-center overflow-hidden p-2 sm:p-4"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onWheel={handleWheel}
         >
           {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100/70 dark:bg-slate-950/60 backdrop-blur-xs z-10">
@@ -1564,79 +1632,129 @@ export default function FilePreview({
 
           {/* ======================= VIDEO VIEWER ======================= */}
           {previewKind === 'video' && (
-            <div ref={videoContainerRef} className="relative w-full max-w-5xl rounded-2xl overflow-hidden bg-black shadow-2xl flex items-center justify-center group">
-              <video
-                ref={videoRef}
-                src={fileUrl}
-                playsInline
-                onTimeUpdate={() => {
-                  if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
-                }}
-                onLoadedMetadata={() => {
-                  if (videoRef.current) setDuration(videoRef.current.duration);
-                  setLoading(false);
-                }}
-                className="max-h-[75vh] w-auto mx-auto object-contain cursor-pointer"
-                onClick={togglePlayVideo}
-              />
+            <div
+              ref={videoContainerRef}
+              className={`w-full ${
+                isFullscreen
+                  ? 'h-full max-w-none'
+                  : 'max-w-5xl aspect-[16/10.5] max-h-[75vh] sm:max-h-[82vh] rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800'
+              } bg-black flex items-center justify-center relative`}
+              style={
+                !isFullscreen && isScaling
+                  ? { height: `${Math.round(BASE_VIDEO_HEIGHT * videoScale)}px` }
+                  : undefined
+              }
+            >
+              {fileId ? (
+                <iframe
+                  src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
+                  title={fileName}
+                  className="border-none"
+                  allow="autoplay; encrypted-media; fullscreen"
+                  onLoad={() => setLoading(false)}
+                  style={{
+                    ...(isScaling
+                      ? {
+                          position: isFullscreen ? 'fixed' : 'absolute',
+                          top: isFullscreen ? `${topOffset}px` : 0,
+                          left: isFullscreen ? `${leftOffset}px` : 0,
+                          width: `${BASE_VIDEO_WIDTH}px`,
+                          height: `${BASE_VIDEO_HEIGHT}px`,
+                          transform: `scale(${videoScale})`,
+                          transformOrigin: '0 0',
+                          maxWidth: 'none',
+                          maxHeight: 'none',
+                          zIndex: isFullscreen ? 99999 : undefined,
+                        }
+                      : {
+                          width: '100%',
+                          height: '100%',
+                        }),
+                    '--video-scale': videoScale,
+                    '--video-top': `${topOffset}px`,
+                    '--video-left': `${leftOffset}px`,
+                  } as unknown as React.CSSProperties}
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  src={fileUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain"
+                  onLoadedMetadata={() => setLoading(false)}
+                />
+              )}
             </div>
           )}
 
           {/* ======================= AUDIO VIEWER ======================= */}
           {previewKind === 'audio' && (
-            <div className="w-full max-w-md bg-white/95 dark:bg-slate-900/90 rounded-3xl border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-2xl p-6 sm:p-8 flex flex-col items-center">
-              <audio
-                ref={audioRef}
-                src={fileUrl}
-                onTimeUpdate={() => {
-                  if (audioRef.current) setAudioCurrentTime(audioRef.current.currentTime);
-                }}
-                onLoadedMetadata={() => {
-                  if (audioRef.current) setAudioDuration(audioRef.current.duration);
-                  setLoading(false);
-                }}
-              />
-              <div className="w-24 h-24 rounded-3xl bg-amber-500/10 flex items-center justify-center mb-6 border border-amber-500/20 shadow-inner">
-                <AudioFileIcon sx={{ fontSize: 52, color: '#f59e0b' }} />
-              </div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 text-center truncate max-w-full px-2" title={fileName}>
-                {fileName}
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{formatBytes(fileSize)}</p>
-              <div className="w-full mt-6">
-                <Slider
-                  size="small"
-                  value={audioCurrentTime}
-                  min={0}
-                  max={audioDuration || 100}
-                  onChange={handleAudioSeek}
-                  sx={{ color: '#f59e0b', height: 4 }}
+            fileId ? (
+              <div className="w-full max-w-4xl aspect-[16/9] max-h-[65vh] sm:max-h-[75vh] rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-black flex items-center justify-center relative">
+                <iframe
+                  src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
+                  title={fileName}
+                  className="w-full h-full border-none"
+                  allow="autoplay; encrypted-media; fullscreen"
+                  onLoad={() => setLoading(false)}
                 />
-                <div className="flex justify-between text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
-                  <span>{formatTime(audioCurrentTime)}</span>
-                  <span>{formatTime(audioDuration)}</span>
+              </div>
+            ) : (
+              <div className="w-full max-w-md bg-white/95 dark:bg-slate-900/90 rounded-3xl border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-2xl p-6 sm:p-8 flex flex-col items-center">
+                <audio
+                  ref={audioRef}
+                  src={fileUrl}
+                  onTimeUpdate={() => {
+                    if (audioRef.current) setAudioCurrentTime(audioRef.current.currentTime);
+                  }}
+                  onLoadedMetadata={() => {
+                    if (audioRef.current) setAudioDuration(audioRef.current.duration);
+                    setLoading(false);
+                  }}
+                />
+                <div className="w-24 h-24 rounded-3xl bg-amber-500/10 flex items-center justify-center mb-6 border border-amber-500/20 shadow-inner">
+                  <AudioFileIcon sx={{ fontSize: 52, color: '#f59e0b' }} />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 text-center truncate max-w-full px-2" title={fileName}>
+                  {fileName}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{formatBytes(fileSize)}</p>
+                <div className="w-full mt-6">
+                  <Slider
+                    size="small"
+                    value={audioCurrentTime}
+                    min={0}
+                    max={audioDuration || 100}
+                    onChange={handleAudioSeek}
+                    sx={{ color: '#f59e0b', height: 4 }}
+                  />
+                  <div className="flex justify-between text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
+                    <span>{formatTime(audioCurrentTime)}</span>
+                    <span>{formatTime(audioDuration)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between w-full mt-4">
+                  <IconButton size="small" onClick={toggleAudioMute} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
+                    {isAudioMuted || audioVolume === 0 ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
+                  </IconButton>
+                  <button
+                    onClick={togglePlayAudio}
+                    aria-label="Play audio"
+                    className="w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95"
+                  >
+                    {isAudioPlaying ? <PauseIcon sx={{ fontSize: 32 }} /> : <PlayArrowIcon sx={{ fontSize: 32 }} />}
+                  </button>
+                  <a
+                    href={fileUrl}
+                    download={fileName}
+                    className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                  >
+                    <DownloadIcon fontSize="small" />
+                  </a>
                 </div>
               </div>
-              <div className="flex items-center justify-between w-full mt-4">
-                <IconButton size="small" onClick={toggleAudioMute} sx={{ color: isDarkMode ? '#cbd5e1' : '#475569' }}>
-                  {isAudioMuted || audioVolume === 0 ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
-                </IconButton>
-                <button
-                  onClick={togglePlayAudio}
-                  aria-label="Play audio"
-                  className="w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95"
-                >
-                  {isAudioPlaying ? <PauseIcon sx={{ fontSize: 32 }} /> : <PlayArrowIcon sx={{ fontSize: 32 }} />}
-                </button>
-                <a
-                  href={fileUrl}
-                  download={fileName}
-                  className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-                >
-                  <DownloadIcon fontSize="small" />
-                </a>
-              </div>
-            </div>
+            )
           )}
 
           {/* ======================= CODE / TEXT VIEWER ======================= */}
@@ -1789,7 +1907,7 @@ export default function FilePreview({
         {/* ========================================================================= */}
         {showInfo && (
           <aside className="w-80 shrink-0 bg-white/95 dark:bg-slate-900/95 border-l border-slate-200 dark:border-slate-800 p-5 overflow-y-auto z-20 backdrop-blur-xl shadow-2xl flex flex-col justify-between">
-            <div className="space-y-6">
+            <div className="flex flex-col gap-6">
               <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
                 <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">File Details</h4>
                 <IconButton size="small" onClick={() => setShowInfo(false)} sx={{ color: isDarkMode ? '#94a3b8' : '#64748b' }}>
@@ -1811,7 +1929,7 @@ export default function FilePreview({
                 </div>
               </div>
 
-              <div className="space-y-3 text-xs">
+              <div className="flex flex-col gap-3 text-xs">
                 <div>
                   <span className="text-slate-500 dark:text-slate-400 font-medium block mb-0.5">Type</span>
                   <span className="text-slate-700 dark:text-slate-300 font-mono text-[11px] break-all">{mimeType || 'Unknown'}</span>

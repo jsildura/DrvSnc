@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useOptionalApp } from '../state/AppProvider';
+import { pathForTab, AppTab } from '../state/tabRoute';
 import { DriveItemView, QuotaView } from '../../shared/contracts';
 import {
   listDriveItems,
@@ -78,6 +80,15 @@ function formatStorageLimit(bytes?: number | null): string {
 }
 
 export function DrivePage() {
+  const app = useOptionalApp();
+  const setActiveTab =
+    app?.setActiveTab ||
+    ((tab: AppTab) => {
+      if (typeof window !== 'undefined') {
+        window.history.pushState({ tab }, '', pathForTab(tab));
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }
+    });
   const [section, setSection] = useState<DriveViewSection>('files');
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     if (typeof localStorage !== 'undefined') {
@@ -397,8 +408,8 @@ export function DrivePage() {
       </div>
 
       {/* Navigation Controls: Sections, View Toggle & Action Buttons */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-2 rounded-2xl bg-slate-100/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
-        <div className="flex items-center gap-1">
+      <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-4 p-2.5 sm:p-2 rounded-2xl bg-slate-100/80 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+        <div className="flex items-center justify-start gap-1 w-full sm:w-auto">
           {(['files', 'shared', 'trash'] as const).map((s) => (
             <button
               key={s}
@@ -407,7 +418,7 @@ export function DrivePage() {
                 setCurrentFolderId(undefined);
                 setBreadcrumbs([{ name: s === 'files' ? 'My Drive' : s === 'shared' ? 'Shared with Me' : 'Trash' }]);
               }}
-              className={`px-3.5 py-1.5 rounded-xl text-sm font-semibold capitalize transition-all ${
+              className={`px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold capitalize transition-all ${
                 section === s
                   ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -418,7 +429,7 @@ export function DrivePage() {
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
           {/* Material 3 Segmented Pill Toggle: List vs Grid */}
           <div className="inline-flex items-center rounded-full border border-slate-300/80 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 p-0.5 shadow-sm">
             <button
@@ -426,7 +437,7 @@ export function DrivePage() {
               onClick={() => handleViewModeChange('list')}
               title="List view"
               aria-label="List view"
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+              className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                 viewMode === 'list'
                   ? 'bg-sky-100 dark:bg-sky-950/80 text-sky-800 dark:text-sky-200 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -446,7 +457,7 @@ export function DrivePage() {
               onClick={() => handleViewModeChange('grid')}
               title="Grid preview view"
               aria-label="Grid view"
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+              className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                 viewMode === 'grid'
                   ? 'bg-sky-100 dark:bg-sky-950/80 text-sky-800 dark:text-sky-200 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -470,7 +481,7 @@ export function DrivePage() {
           {section === 'files' && (
             <button
               onClick={() => setShowNewFolderModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-colors"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -482,7 +493,7 @@ export function DrivePage() {
           {section === 'trash' && items.length > 0 && (
             <button
               onClick={handleEmptyTrash}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm transition-colors"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm transition-colors"
             >
               <span>Empty Trash</span>
             </button>
@@ -656,6 +667,17 @@ export function DrivePage() {
                       </>
                     ) : (
                       <>
+                        {item.mimeType?.startsWith('video/') && (
+                          <button
+                            onClick={() => setActiveTab('converter')}
+                            title="Convert Video"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setRenamingItem(item);
@@ -902,6 +924,17 @@ export function DrivePage() {
                               </>
                             ) : (
                               <>
+                                {file.mimeType?.startsWith('video/') && (
+                                  <button
+                                    onClick={() => setActiveTab('converter')}
+                                    title="Convert Video"
+                                    className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                                  >
+                                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => {
                                     setRenamingItem(file);

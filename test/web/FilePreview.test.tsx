@@ -94,8 +94,8 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     fireEvent.click(rotateBtn);
   });
 
-  it('renders video player with custom controls', async () => {
-    render(
+  it('renders Google Drive built-in player for video and HTML5 video when fileId is absent', async () => {
+    const { rerender } = render(
       <FilePreview
         open={true}
         onClose={vi.fn()}
@@ -108,10 +108,27 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     );
 
     expect(screen.getByText('demo_recording.mp4')).toBeDefined();
+    const iframe = document.querySelector('iframe[title="demo_recording.mp4"]');
+    expect(iframe?.getAttribute('src')).toBe('https://drive.google.com/file/d/vid-123/preview');
+    expect(iframe?.parentElement?.className).toContain('aspect-[16/10.5]');
+
+    // When fileId is absent, renders standard HTML5 video player
+    rerender(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId=""
+        fileName="direct_clip.mp4"
+        mimeType="video/mp4"
+        fileSize={15000000}
+        fileUrl="https://example.com/direct_clip.mp4"
+      />
+    );
+    expect(document.querySelector('video')).toBeDefined();
   });
 
-  it('renders audio player with custom controls and audio file icon', async () => {
-    render(
+  it('renders Google Drive built-in player for audio and HTML5 audio player when fileId is absent', async () => {
+    const { rerender } = render(
       <FilePreview
         open={true}
         onClose={vi.fn()}
@@ -124,6 +141,20 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     );
 
     expect(screen.getAllByText('podcast_episode.mp3').length).toBeGreaterThan(0);
+    const iframe = document.querySelector('iframe[title="podcast_episode.mp3"]');
+    expect(iframe?.getAttribute('src')).toBe('https://drive.google.com/file/d/audio-123/preview');
+
+    rerender(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId=""
+        fileName="direct_track.mp3"
+        mimeType="audio/mp3"
+        fileSize={8000000}
+        fileUrl="https://example.com/direct_track.mp3"
+      />
+    );
     expect(screen.getByLabelText('Play audio')).toBeDefined();
   });
 

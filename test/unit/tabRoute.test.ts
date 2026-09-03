@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { AppTab, LOGIN_PATH, TAB_PATHS, pathForTab, tabForPath } from '../../src/web/state/tabRoute';
 
 describe('tabRoute path <-> tab mapping', () => {
-  const tabs: AppTab[] = ['uploader', 'drive', 'settings'];
+  const tabs: AppTab[] = ['uploader', 'drive', 'converter', 'settings'];
 
   it('maps each tab to its canonical path', () => {
     expect(pathForTab('uploader')).toBe('/uploads');
     expect(pathForTab('drive')).toBe('/drive');
+    expect(pathForTab('converter')).toBe('/converter');
     expect(pathForTab('settings')).toBe('/settings');
   });
 

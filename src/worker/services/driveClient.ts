@@ -260,7 +260,12 @@ export async function listItems(
     }
 
     if (options?.query) {
-      qParts.push(`name contains '${escapeQueryString(options.query)}'`);
+      const trimmed = options.query.trim();
+      const token = trimmed.replace(/^\.+/, '');
+      const escaped = escapeQueryString(token || trimmed);
+      if (escaped) {
+        qParts.push(`name contains '${escaped}'`);
+      }
     }
 
     url.searchParams.set('q', qParts.join(' and '));
@@ -399,13 +404,16 @@ export async function searchItems(
 ): Promise<DrivePage> {
   return withDriveAuth(env, userId, async (token) => {
     const url = new URL(`${DRIVE_API_BASE}/files`);
-    const escaped = escapeQueryString(query);
-    url.searchParams.set(
-      'q',
-      `trashed = false and (name contains '${escaped}' or fullText contains '${escaped}')`
-    );
+    const trimmed = query.trim();
+    const cleanTerm = trimmed.replace(/^\.+/, '');
+    const escaped = escapeQueryString(cleanTerm || trimmed);
+    const qParts = ['trashed = false'];
+    if (escaped) {
+      qParts.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+    }
+    url.searchParams.set('q', qParts.join(' and '));
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 100)));
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
     const res = await fetch(url.toString(), {
@@ -822,17 +830,20 @@ export async function getFileMetadata(
 export async function downloadFile(
   env: Env,
   userId: string,
-  fileId: string
+  fileId: string,
+  range?: string
 ): Promise<Response> {
   return withDriveAuth(env, userId, async (token) => {
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+    if (range) {
+      headers.Range = range;
+    }
     const res = await fetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      }
+      { headers }
     );
 
-    if (!res.ok) {
+    if (!res.ok && res.status !== 206) {
       const mapped = mapDriveError(res.status);
       throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
     }

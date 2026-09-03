@@ -225,6 +225,10 @@ export async function fetchRemoteWithPolicy(
   }
 
   const sanitizedHeaders = new Headers(init?.headers);
+  if (urlStr.includes('video-converter.com')) {
+    sanitizedHeaders.set('Referer', 'https://video-converter.com/');
+    sanitizedHeaders.set('Origin', 'https://video-converter.com');
+  }
   // Strip sensitive headers across redirects
   if (redirectCount > 0) {
     sanitizedHeaders.delete('Authorization');

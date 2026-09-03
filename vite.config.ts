@@ -14,7 +14,11 @@ export default defineConfig({
       // (--socket-addr=entry=127.0.0.1:8787), while Node resolves "localhost" to
       // ::1 first. Going through "localhost" leaves every /api call depending on
       // an IPv6 -> IPv4 fallback that adds latency and intermittently 502s.
-      '/api': 'http://127.0.0.1:8787',
+      '/api': {
+        target: 'http://127.0.0.1:8787',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 });
