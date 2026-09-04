@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useOptionalApp } from '../state/AppProvider';
 import { pathForTab, AppTab } from '../state/tabRoute';
-import { DriveItemView, QuotaView } from '../../shared/contracts';
+import { DriveItemView, QuotaView, detectVideoQuality } from '../../shared/contracts';
+import { SelectedDriveFile } from '../converter/types';
 import {
   listDriveItems,
   listSharedItems,
@@ -23,6 +24,33 @@ type ViewMode = 'list' | 'grid';
 type Toast = { id: number; message: string; variant: 'success' | 'error' };
 
 const TOAST_DURATION_MS = 4000;
+
+const VIDEO_EXTS = /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|3gp|ts|mts|m2ts|vob|ogv|mpg|mpeg)$/i;
+const AUDIO_EXTS = /\.(mp3|wav|m4a|m4r|flac|ogg|oga|opus|mp2|amr|aac|wma|aiff|aif|alac|ape|ac3|dts|mid|midi)$/i;
+const DOC_EXTS = /\.(pdf|docx?|txt|rtf|odt|html?|epub|mobi|xlsx?|pptx?|csv|xml)$/i;
+
+function isConvertibleVideo(item: DriveItemView): boolean {
+  if (item.isFolder) return false;
+  return Boolean(item.mimeType?.startsWith('video/') || VIDEO_EXTS.test(item.name));
+}
+
+function isConvertibleAudio(item: DriveItemView): boolean {
+  if (item.isFolder) return false;
+  return Boolean(item.mimeType?.startsWith('audio/') || AUDIO_EXTS.test(item.name));
+}
+
+function isConvertibleDoc(item: DriveItemView): boolean {
+  if (item.isFolder) return false;
+  const mime = item.mimeType || '';
+  return Boolean(
+    mime === 'application/pdf' ||
+    mime.includes('document') ||
+    mime.includes('spreadsheet') ||
+    mime.includes('presentation') ||
+    mime.startsWith('text/') ||
+    DOC_EXTS.test(item.name)
+  );
+}
 
 function getFileExtension(name: string): string {
   const parts = name.split('.');
@@ -89,6 +117,40 @@ export function DrivePage() {
         window.dispatchEvent(new PopStateEvent('popstate'));
       }
     });
+
+  const handleConvertFile = (item: DriveItemView) => {
+    const fileToConvert: SelectedDriveFile = {
+      id: item.id,
+      name: item.name,
+      sizeBytes: item.size || 0,
+      mimeType: item.mimeType || 'application/octet-stream',
+      parentFolderId: item.parents?.[0] || currentFolderId || undefined,
+      videoMetadata: item.videoMediaMetadata
+        ? {
+            width: item.videoMediaMetadata.width ?? undefined,
+            height: item.videoMediaMetadata.height ?? undefined,
+            durationMillis:
+              item.videoMediaMetadata.durationMillis != null
+                ? Number(item.videoMediaMetadata.durationMillis)
+                : undefined,
+          }
+        : undefined,
+    };
+
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem('gdu_pending_converter_file', JSON.stringify(fileToConvert));
+      }
+    } catch {
+      // ignore
+    }
+
+    if (app?.navigateToConverter) {
+      app.navigateToConverter(fileToConvert);
+    } else {
+      setActiveTab('converter');
+    }
+  };
   const [section, setSection] = useState<DriveViewSection>('files');
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     if (typeof localStorage !== 'undefined') {
@@ -117,6 +179,54 @@ export function DrivePage() {
   const [previewItem, setPreviewItem] = useState<DriveItemView | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number>(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [probedQuality, setProbedQuality] = useState<Record<string, string>>({});
+  const probingRef = useRef<Record<string, boolean>>({});
+
+  const getVideoQuality = useCallback(
+    (file: DriveItemView): string | null => {
+      if (!isConvertibleVideo(file)) return null;
+      if (file.videoQuality) return file.videoQuality;
+      const detected = detectVideoQuality(file.videoMediaMetadata, file.name);
+      if (detected) return detected;
+      return probedQuality[file.id] || null;
+    },
+    [probedQuality]
+  );
+
+  // Lazy probe quality for videos without metadata in browser environment
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const candidates = items.filter(
+      (f) =>
+        isConvertibleVideo(f) &&
+        !f.videoQuality &&
+        !detectVideoQuality(f.videoMediaMetadata, f.name) &&
+        !probedQuality[f.id] &&
+        !probingRef.current[f.id]
+    );
+    if (candidates.length === 0) return;
+
+    for (const f of candidates) {
+      probingRef.current[f.id] = true;
+      try {
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.src = getDownloadUrl(f.id);
+        v.onloadedmetadata = () => {
+          if (v.videoHeight > 0) {
+            const q = detectVideoQuality({ width: v.videoWidth, height: v.videoHeight });
+            if (q) setProbedQuality((prev) => ({ ...prev, [f.id]: q }));
+          }
+          v.src = '';
+        };
+        v.onerror = () => {
+          v.src = '';
+        };
+      } catch {
+        // ignore probe error
+      }
+    }
+  }, [items, probedQuality]);
 
   const toastIdRef = useRef(0);
   // Ids we removed locally (trashed / restored / deleted). Drive's list API is
@@ -593,9 +703,19 @@ export function DrivePage() {
                       )}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">
-                        {item.name}
-                      </p>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">
+                          {item.name}
+                        </p>
+                        {(() => {
+                          const q = getVideoQuality(item);
+                          return q ? (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/60">
+                              {q}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
                       <p className="text-xs text-slate-400">
                         {item.size ? `${(item.size / (1024 * 1024)).toFixed(2)} MiB` : 'Folder'} •{' '}
                         {item.modifiedTime ? new Date(item.modifiedTime).toLocaleDateString() : '—'}
@@ -667,14 +787,36 @@ export function DrivePage() {
                       </>
                     ) : (
                       <>
-                        {item.mimeType?.startsWith('video/') && (
+                        {isConvertibleVideo(item) && (
                           <button
-                            onClick={() => setActiveTab('converter')}
+                            onClick={() => handleConvertFile(item)}
                             title="Convert Video"
                             className="p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        )}
+                        {isConvertibleAudio(item) && !isConvertibleVideo(item) && (
+                          <button
+                            onClick={() => handleConvertFile(item)}
+                            title="Convert Audio"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                            </svg>
+                          </button>
+                        )}
+                        {isConvertibleDoc(item) && !isConvertibleVideo(item) && !isConvertibleAudio(item) && (
+                          <button
+                            onClick={() => handleConvertFile(item)}
+                            title="Convert Document"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
                             </svg>
                           </button>
                         )}
@@ -838,8 +980,24 @@ export function DrivePage() {
                           </div>
                         )}
 
+                        {/* Video Quality Badge (Top-left, e.g. 720p, 1080p, 4K) */}
+                        {(() => {
+                          const qualityBadge = getVideoQuality(file);
+                          return qualityBadge ? (
+                            <div
+                              title={`Quality: ${qualityBadge}`}
+                              className="absolute top-1 left-1 sm:top-2 sm:left-2 px-1 sm:px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-mono font-bold bg-slate-900/70 backdrop-blur-md text-white shadow-xs z-10 flex items-center gap-0.5"
+                            >
+                              <svg className="w-2.5 h-2.5 sm:w-3 sm:h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                              </svg>
+                              <span>{qualityBadge}</span>
+                            </div>
+                          ) : null;
+                        })()}
+
                         {/* Format Badge */}
-                        <div className="absolute top-1 right-1 sm:top-2 sm:right-2 px-1 sm:px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-mono font-bold bg-slate-900/70 backdrop-blur-md text-white shadow-xs">
+                        <div className="absolute top-1 right-1 sm:top-2 sm:right-2 px-1 sm:px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-mono font-bold bg-slate-900/70 backdrop-blur-md text-white shadow-xs z-10">
                           {ext}
                         </div>
                       </div>
@@ -924,14 +1082,36 @@ export function DrivePage() {
                               </>
                             ) : (
                               <>
-                                {file.mimeType?.startsWith('video/') && (
+                                {isConvertibleVideo(file) && (
                                   <button
-                                    onClick={() => setActiveTab('converter')}
+                                    onClick={() => handleConvertFile(file)}
                                     title="Convert Video"
                                     className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
                                   >
                                     <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                  </button>
+                                )}
+                                {isConvertibleAudio(file) && !isConvertibleVideo(file) && (
+                                  <button
+                                    onClick={() => handleConvertFile(file)}
+                                    title="Convert Audio"
+                                    className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                                  >
+                                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                    </svg>
+                                  </button>
+                                )}
+                                {isConvertibleDoc(file) && !isConvertibleVideo(file) && !isConvertibleAudio(file) && (
+                                  <button
+                                    onClick={() => handleConvertFile(file)}
+                                    title="Convert Document"
+                                    className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+                                  >
+                                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
                                     </svg>
                                   </button>
                                 )}

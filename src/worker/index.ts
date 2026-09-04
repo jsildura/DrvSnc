@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
 import { Env } from './env';
 import { sessionMiddleware, requireSession, AuthenticatedSession } from './middleware/session';
@@ -10,6 +11,7 @@ import { driveRoutes } from './routes/drive';
 import { jobRoutes } from './routes/jobs';
 import { seedrRoutes } from './routes/seedr';
 import { converterRoutes } from './routes/converter';
+import { uploadRoutes } from './routes/uploads';
 import { handleScheduledCleanup } from './scheduled/cleanup';
 import { AccountView } from '../shared/contracts';
 
@@ -33,7 +35,7 @@ app.use('*', async (c, next) => {
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   c.header(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com wss://*.video-converter.com https://*.video-converter.com; frame-src 'self' https://drive.google.com https://docs.google.com blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com wss://*.video-converter.com https://*.video-converter.com https://*.convert.io wss://*.convert.io http://localhost:8787 ws://localhost:8787 http://127.0.0.1:8787 ws://127.0.0.1:8787; frame-src 'self' https://drive.google.com https://docs.google.com blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
   );
 
   if (c.req.url.startsWith('https://')) {
@@ -42,6 +44,42 @@ app.use('*', async (c, next) => {
 
   await next();
 });
+
+// CORS middleware for all API routes
+app.use(
+  '/api/*',
+  cors({
+    origin: (origin, c) => {
+      if (!origin) return '*';
+      const allowed = [
+        'http://localhost:5173',
+        'http://localhost:8787',
+        'http://127.0.0.1:5173',
+        'http://127.0.0.1:8787',
+      ];
+      if (c.env.APP_ORIGIN) allowed.push(c.env.APP_ORIGIN);
+      if (allowed.includes(origin) || origin.endsWith('.workers.dev')) {
+        return origin;
+      }
+      return origin;
+    },
+    allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowHeaders: [
+      'Content-Type',
+      'Content-Length',
+      'Authorization',
+      'X-Request-Id',
+      'Idempotency-Key',
+      'Range',
+      'X-CSRF-Token',
+      'baggage',
+      'sentry-trace',
+    ],
+    exposeHeaders: ['ETag', 'Content-Length', 'Content-Range', 'X-Request-Id'],
+    credentials: true,
+    maxAge: 86400,
+  })
+);
 
 // Cache control for all API responses
 app.use('/api/*', async (c, next) => {
@@ -70,6 +108,7 @@ app.route('/api/v1/drive', driveRoutes);
 app.route('/api/v1/jobs', jobRoutes);
 app.route('/api/v1/seedr', seedrRoutes);
 app.route('/api/v1/converter', converterRoutes);
+app.route('/api/v1/uploads', uploadRoutes);
 
 // Active session profile route
 app.get('/api/v1/session', requireSession, (c) => {

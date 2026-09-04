@@ -3,6 +3,7 @@ import { AccountView, PreferencesView } from '../../shared/contracts';
 import { apiRequest, setCsrfToken } from '../api/client';
 import { rememberAccount, forgetRememberedAccount } from '../auth/rememberedAccounts';
 import { AppTab, LOGIN_PATH, pathForTab, tabForPath } from './tabRoute';
+import { SelectedDriveFile } from '../converter/types';
 
 export type { AppTab } from './tabRoute';
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -13,6 +14,9 @@ interface AppContextType {
   isLoading: boolean;
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
+  pendingConverterFile: SelectedDriveFile | null;
+  setPendingConverterFile: (file: SelectedDriveFile | null) => void;
+  navigateToConverter: (file?: SelectedDriveFile | null) => void;
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
   refreshSession: () => Promise<void>;
@@ -40,6 +44,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return 'system';
   });
   const [error, setError] = useState<string | null>(null);
+  const [pendingConverterFile, setPendingConverterFile] = useState<SelectedDriveFile | null>(null);
 
   // Tabs are real history entries, so Back returns to the previously viewed tab.
   // Only the path is passed to pushState, which also drops any stale query string
@@ -52,6 +57,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.history.pushState({ tab }, '', target);
     }
   }, []);
+
+  const navigateToConverter = useCallback(
+    (file?: SelectedDriveFile | null) => {
+      if (file) {
+        setPendingConverterFile(file);
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem('gdu_pending_converter_file', JSON.stringify(file));
+          }
+        } catch {
+          // ignore
+        }
+      }
+      setActiveTab('converter');
+    },
+    [setActiveTab]
+  );
 
   useEffect(() => {
     // Deliberately setActiveTabState, not setActiveTab: reacting to Back/Forward
@@ -268,6 +290,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isLoading,
         activeTab,
         setActiveTab,
+        pendingConverterFile,
+        setPendingConverterFile,
+        navigateToConverter,
         theme,
         setTheme,
         refreshSession,

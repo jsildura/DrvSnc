@@ -238,4 +238,44 @@ describe('Contracts & DTO validation', () => {
       expect(parsed.itemCount).toBe(2);
     });
   });
+
+  describe('detectVideoQuality', () => {
+    it('detects 4K from dimensions', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality({ width: 3840, height: 2160 })).toBe('4K');
+      expect(detectVideoQuality({ height: 2160 })).toBe('4K');
+    });
+
+    it('detects 1440p from dimensions', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality({ width: 2560, height: 1440 })).toBe('1440p');
+    });
+
+    it('detects 1080p from dimensions', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality({ width: 1920, height: 1080 })).toBe('1080p');
+      expect(detectVideoQuality({ height: 1080 })).toBe('1080p');
+    });
+
+    it('detects 720p from dimensions', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality({ width: 1280, height: 720 })).toBe('720p');
+      expect(detectVideoQuality({ height: 720 })).toBe('720p');
+    });
+
+    it('detects 480p and 360p from dimensions', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality({ width: 854, height: 480 })).toBe('480p');
+      expect(detectVideoQuality({ width: 640, height: 360 })).toBe('360p');
+    });
+
+    it('falls back to filename hints when metadata is missing', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      expect(detectVideoQuality(undefined, 'holiday_vacation_1080p.mp4')).toBe('1080p');
+      expect(detectVideoQuality(null, 'nature_documentary.720P.mkv')).toBe('720p');
+      expect(detectVideoQuality(undefined, 'trailer_4k.mp4')).toBe('4K');
+      expect(detectVideoQuality(undefined, 'clip_480p.webm')).toBe('480p');
+      expect(detectVideoQuality(undefined, 'no_quality_info.mp4')).toBeNull();
+    });
+  });
 });

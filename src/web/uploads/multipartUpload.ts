@@ -51,6 +51,23 @@ function readPartEtag(res: Response, partNumber: number): string {
   return cleaned;
 }
 
+export function normalizeUploadUrl(url: string): string {
+  if (typeof window !== 'undefined' && url.includes('/api/v1/uploads/direct/')) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (
+        (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') &&
+        (parsed.port === '8787' || parsed.port === '5173')
+      ) {
+        return `${parsed.pathname}${parsed.search}`;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return url;
+}
+
 export async function uploadFileMultipart(
   file: File,
   options: UploadPartOption,
@@ -108,7 +125,8 @@ export async function uploadFileMultipart(
         if (signal?.aborted) throw new Error('Upload aborted');
 
         try {
-          const res = await fetchFn(signedUrl, {
+          const targetUrl = normalizeUploadUrl(signedUrl);
+          const res = await fetchFn(targetUrl, {
             method: 'PUT',
             headers: {
               // Content-Length is a forbidden header name in browsers; the
@@ -259,7 +277,8 @@ export async function uploadStreamMultipart(
       throwIfAborted();
 
       try {
-        const res = await fetchFn(signedUrl, {
+        const targetUrl = normalizeUploadUrl(signedUrl);
+        const res = await fetchFn(targetUrl, {
           method: 'PUT',
           headers: {
             // Content-Length is a forbidden header name in browsers; the fetch layer derives it

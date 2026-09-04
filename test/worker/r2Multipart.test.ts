@@ -263,5 +263,36 @@ describe('R2 Multipart Local File Staging API', () => {
       const job = await completeRes.json<UploadJobView>();
       expect(job.status).toBe('queued');
     });
+
+    it('handles OPTIONS CORS preflight and PUT direct chunk uploads', async () => {
+      // 1. CORS Preflight OPTIONS
+      const optionsRes = await SELF.fetch('https://example.com/api/v1/uploads/direct/staging/user1/job1/file.doc?partNumber=1&uploadId=up-123', {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'http://localhost:5173',
+          'Access-Control-Request-Method': 'PUT',
+          'Access-Control-Request-Headers': 'Content-Type',
+        },
+      });
+
+      expect(optionsRes.status).toBe(204);
+      expect(optionsRes.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+      expect(optionsRes.headers.get('Access-Control-Allow-Methods')).toContain('PUT');
+      expect(optionsRes.headers.get('Access-Control-Expose-Headers')).toContain('ETag');
+
+      // 2. PUT chunk upload
+      const putRes = await SELF.fetch('https://example.com/api/v1/uploads/direct/staging/user1/job1/file.doc?partNumber=1&uploadId=up-123', {
+        method: 'PUT',
+        headers: {
+          Origin: 'http://localhost:5173',
+          'Content-Type': 'application/octet-stream',
+        },
+        body: new Uint8Array([1, 2, 3, 4, 5]),
+      });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.headers.get('ETag')).toBeDefined();
+      expect(putRes.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+    });
   });
 });

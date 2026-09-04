@@ -1,6 +1,6 @@
 import { DriveItemView } from '../../shared/contracts';
 
-export type MediaType = 'video' | 'audio';
+export type MediaType = 'video' | 'audio' | 'document';
 
 export interface PresetItem {
   id: string;
@@ -11,6 +11,8 @@ export interface PresetItem {
   vb?: number; // video bitrate kbps
   ab?: number; // audio bitrate kbps
   ac?: number; // audio channels
+  ar?: number; // audio sample rate Hz
+  sampleSize?: number; // sample bit depth
 }
 
 export interface FormatConfig {
@@ -19,7 +21,7 @@ export interface FormatConfig {
   extension: string;
   ffmpegFormat?: string;
   defaultPreset: string;
-  presets: Record<string, PresetItem>;
+  presets?: Record<string, PresetItem>;
   vcodecs?: string[];
   acodecs?: string[];
   defaults: {
@@ -27,6 +29,7 @@ export interface FormatConfig {
     acodec?: string;
     ab?: number;
     ac?: number;
+    ar?: number;
   };
 }
 
@@ -46,7 +49,7 @@ export const THREEGP_RESOLUTIONS: PresetItem[] = [
   { id: 'hd720p', name: 'HD 720p', name2: '1280x720', width: 1280, height: 720, vb: 4500 },
   { id: '480p', name: '480p', name2: '854x480', width: 854, height: 480 },
   { id: '360p', name: '360p', name2: '640x360', width: 640, height: 360 },
-  { id: '240p', name: '360p', name2: '426x240', width: 426, height: 240 },
+  { id: '240p', name: '240p', name2: '426x240', width: 426, height: 240 },
   { id: 'tv', name: 'TV', name2: '640x480', width: 640, height: 480 },
   { id: '320x240', name: '320x240', name2: '320x240', width: 320, height: 240, ab: 64, ac: 1 },
   { id: '176x144', name: '176x144', name2: '176x144', width: 176, height: 144, ac: 1, ab: 12 },
@@ -155,53 +158,187 @@ export const VIDEO_FORMATS: Record<string, FormatConfig> = {
   },
 };
 
+export interface AudioPresetStop {
+  id: 'first' | 'second' | 'third' | 'fourth';
+  name: string;
+  name2: string;
+  ab?: number;
+  ac?: number;
+  ar?: number;
+  sampleSize?: number;
+}
+
 export const AUDIO_PRESETS: PresetItem[] = [
-  { id: 'economy', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
-  { id: 'standard', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
-  { id: 'good', name: 'Good', name2: '192 kbps', ab: 192, ac: 2 },
-  { id: 'best', name: 'Best', name2: '320 kbps', ab: 320, ac: 2 },
+  { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+  { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+  { id: 'third', name: 'Good', name2: '192 kbps', ab: 192, ac: 2 },
+  { id: 'fourth', name: 'Best', name2: '320 kbps', ab: 320, ac: 2 },
 ];
 
-export const AUDIO_FORMATS: Record<string, FormatConfig> = {
+export interface AudioFormatDetails {
+  id: string;
+  label: string;
+  longName?: string;
+  extension: string;
+  ffmpegFormat?: string;
+  defaultPreset?: 'first' | 'second' | 'third' | 'fourth';
+  defaultVariableBitrate?: number;
+  presets?: Record<'first' | 'second' | 'third' | 'fourth', AudioPresetStop>;
+  bitrates?: number[];
+  bitratesVariable?: number[];
+  sampleRates?: number[];
+  channels?: number[];
+  defaults: {
+    ac?: number;
+    ar?: number;
+    ab?: number;
+    acodec?: string;
+  };
+}
+
+export const AUDIO_PRESET_MAP = {
+  first: 0,
+  second: 1,
+  third: 2,
+  fourth: 3,
+  0: 'first',
+  1: 'second',
+  2: 'third',
+  3: 'fourth',
+} as const;
+
+export const AUDIO_FORMATS: Record<string, AudioFormatDetails & FormatConfig> = {
   mp3: {
     id: 'mp3',
     label: 'mp3',
+    longName: 'MP3',
     extension: 'mp3',
-    defaultPreset: 'standard',
-    presets: Object.fromEntries(AUDIO_PRESETS.map((r) => [r.id, r])),
-    defaults: { acodec: 'mp3', ab: 128, ac: 2 },
+    ffmpegFormat: 'mp3',
+    defaultPreset: 'second',
+    defaultVariableBitrate: 5,
+    presets: {
+      first: { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+      second: { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+      third: { id: 'third', name: 'Good', name2: '192 kbps', ab: 192, ac: 2 },
+      fourth: { id: 'fourth', name: 'Best', name2: '320 kbps', ab: 320, ac: 2 },
+    },
+    bitrates: [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    bitratesVariable: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    channels: [1, 2],
+    sampleRates: [32000, 44100, 48000],
+    defaults: { ac: 2, ar: 44100, ab: 128, acodec: 'mp3' },
   },
   wav: {
     id: 'wav',
     label: 'wav',
+    longName: 'WAV',
     extension: 'wav',
-    defaultPreset: 'standard',
-    presets: Object.fromEntries(AUDIO_PRESETS.map((r) => [r.id, r])),
-    defaults: { acodec: 'pcm', ab: 1411, ac: 2 },
+    ffmpegFormat: 'wav',
+    defaultPreset: 'second',
+    presets: {
+      first: { id: 'first', name: 'Tape quality', name2: '20 Khz', ac: 2, sampleSize: 16, ar: 22050 },
+      second: { id: 'second', name: 'CD quality', name2: '44.1 Khz', ac: 2, sampleSize: 16, ar: 44100 },
+      third: { id: 'third', name: 'DVD quality', name2: '48 Khz', ac: 2, sampleSize: 16, ar: 48000 },
+      fourth: { id: 'fourth', name: 'Hi-Res quality', name2: '96 Khz', ac: 2, sampleSize: 32, ar: 96000 },
+    },
+    channels: [1, 2],
+    sampleRates: [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000],
+    defaults: { ac: 2, ar: 44100, acodec: 'pcm' },
+  },
+  m4r: {
+    id: 'm4r',
+    label: 'iPhone',
+    longName: 'iPhone',
+    extension: 'm4r',
+    ffmpegFormat: 'mp4',
+    defaultPreset: 'third',
+    presets: {
+      first: { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+      second: { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+      third: { id: 'third', name: 'Good', name2: '160 kbps', ab: 160, ac: 2 },
+      fourth: { id: 'fourth', name: 'Best', name2: '256 kbps', ab: 256, ac: 2 },
+    },
+    bitrates: [16, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512],
+    channels: [1, 2],
+    sampleRates: [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000],
+    defaults: { ac: 2, ar: 44100, ab: 160, acodec: 'aac' },
   },
   m4a: {
     id: 'm4a',
     label: 'm4a',
+    longName: 'M4A',
     extension: 'm4a',
-    defaultPreset: 'standard',
-    presets: Object.fromEntries(AUDIO_PRESETS.map((r) => [r.id, r])),
-    defaults: { acodec: 'aac', ab: 128, ac: 2 },
+    ffmpegFormat: 'mp4',
+    defaultPreset: 'third',
+    presets: {
+      first: { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+      second: { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+      third: { id: 'third', name: 'Good', name2: '160 kbps', ab: 160, ac: 2 },
+      fourth: { id: 'fourth', name: 'Best', name2: '256 kbps', ab: 256, ac: 2 },
+    },
+    bitrates: [16, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512],
+    channels: [1, 2],
+    sampleRates: [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000],
+    defaults: { ac: 2, ar: 44100, ab: 256, acodec: 'aac' },
   },
   flac: {
     id: 'flac',
     label: 'flac',
+    longName: 'FLAC',
     extension: 'flac',
-    defaultPreset: 'best',
-    presets: Object.fromEntries(AUDIO_PRESETS.map((r) => [r.id, r])),
-    defaults: { acodec: 'flac', ab: 320, ac: 2 },
+    ffmpegFormat: 'flac',
+    defaultPreset: 'second',
+    channels: [1, 2],
+    sampleRates: [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000],
+    defaults: { ac: 2, ar: 48000, acodec: 'flac' },
   },
   ogg: {
     id: 'ogg',
     label: 'ogg',
+    longName: 'OGG',
     extension: 'ogg',
-    defaultPreset: 'standard',
-    presets: Object.fromEntries(AUDIO_PRESETS.map((r) => [r.id, r])),
-    defaults: { acodec: 'vorbis', ab: 128, ac: 2 },
+    ffmpegFormat: 'ogg',
+    defaultPreset: 'third',
+    presets: {
+      first: { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+      second: { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+      third: { id: 'third', name: 'Good', name2: '160 kbps', ab: 160, ac: 2 },
+      fourth: { id: 'fourth', name: 'Best', name2: '256 kbps', ab: 256, ac: 2 },
+    },
+    bitrates: [96, 112, 128, 160, 192, 224, 256],
+    channels: [1, 2],
+    sampleRates: [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000],
+    defaults: { ac: 2, ar: 44100, ab: 160, acodec: 'vorbis' },
+  },
+  mp2: {
+    id: 'mp2',
+    label: 'mp2',
+    longName: 'MP2',
+    extension: 'mp2',
+    ffmpegFormat: 'mp2',
+    defaultPreset: 'third',
+    presets: {
+      first: { id: 'first', name: 'Economy', name2: '64 kbps', ab: 64, ac: 1 },
+      second: { id: 'second', name: 'Standard', name2: '128 kbps', ab: 128, ac: 2 },
+      third: { id: 'third', name: 'Good', name2: '160 kbps', ab: 160, ac: 2 },
+      fourth: { id: 'fourth', name: 'Best', name2: '256 kbps', ab: 256, ac: 2 },
+    },
+    bitrates: [64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    channels: [1, 2],
+    sampleRates: [22050, 24000, 32000, 44100, 48000],
+    defaults: { ac: 2, ar: 44100, ab: 192, acodec: 'mp2' },
+  },
+  amr: {
+    id: 'amr',
+    label: 'amr',
+    longName: 'AMR',
+    extension: 'amr',
+    ffmpegFormat: 'amr',
+    defaultPreset: 'second',
+    bitrates: [4.75, 5.15, 5.9, 6.7, 7.4, 7.95, 10.2, 12.2],
+    channels: [1],
+    sampleRates: [8000],
+    defaults: { ac: 1, ar: 8000, ab: 12.2, acodec: 'amr_nb' },
   },
 };
 
@@ -229,7 +366,58 @@ export const CODEC_DISPLAY_NAMES: Record<string, string> = {
   alac: 'Apple Lossless (ALAC)',
   flac: 'FLAC',
   pcm: 'WAV PCM',
+  amr_nb: 'AMR-NB',
 };
+
+export interface DocumentFormatItem {
+  id: string;
+  label: string;
+  extension: string;
+  name: string;
+  category: 'document' | 'spreadsheet' | 'presentation' | 'ebook';
+  description?: string;
+}
+
+export const DOCUMENT_FORMATS: Record<string, DocumentFormatItem> = {
+  pdf: { id: 'pdf', label: 'pdf', extension: 'pdf', name: 'PDF Document', category: 'document', description: 'Portable Document Format' },
+  docx: { id: 'docx', label: 'docx', extension: 'docx', name: 'Word Document', category: 'document', description: 'Microsoft Word Document (XML)' },
+  doc: { id: 'doc', label: 'doc', extension: 'doc', name: 'Word 97-2004', category: 'document', description: 'Microsoft Word 97-2004' },
+  txt: { id: 'txt', label: 'txt', extension: 'txt', name: 'Plain Text', category: 'document', description: 'Unformatted Plain Text' },
+  rtf: { id: 'rtf', label: 'rtf', extension: 'rtf', name: 'Rich Text', category: 'document', description: 'Rich Text Format' },
+  odt: { id: 'odt', label: 'odt', extension: 'odt', name: 'OpenDocument Text', category: 'document', description: 'OpenDocument Text Document' },
+  html: { id: 'html', label: 'html', extension: 'html', name: 'HTML Document', category: 'document', description: 'HyperText Markup Language' },
+  epub: { id: 'epub', label: 'epub', extension: 'epub', name: 'EPUB E-Book', category: 'ebook', description: 'Electronic Publication' },
+  mobi: { id: 'mobi', label: 'mobi', extension: 'mobi', name: 'MOBI E-Book', category: 'ebook', description: 'Mobipocket E-Book' },
+  xlsx: { id: 'xlsx', label: 'xlsx', extension: 'xlsx', name: 'Excel Spreadsheet', category: 'spreadsheet', description: 'Microsoft Excel Spreadsheet (XML)' },
+  xls: { id: 'xls', label: 'xls', extension: 'xls', name: 'Excel 97-2004', category: 'spreadsheet', description: 'Microsoft Excel 97-2004' },
+  pptx: { id: 'pptx', label: 'pptx', extension: 'pptx', name: 'PowerPoint', category: 'presentation', description: 'Microsoft PowerPoint Presentation (XML)' },
+  ppt: { id: 'ppt', label: 'ppt', extension: 'ppt', name: 'PowerPoint 97-2004', category: 'presentation', description: 'Microsoft PowerPoint 97-2004' },
+  csv: { id: 'csv', label: 'csv', extension: 'csv', name: 'CSV Document', category: 'spreadsheet', description: 'Comma Separated Values' },
+};
+
+export const PRIMARY_DOCUMENT_FORMAT_KEYS = ['pdf', 'docx', 'txt', 'rtf', 'odt'];
+
+export interface TrackInfo {
+  setTag: boolean;
+  title: string;
+  artist: string;
+  album: string;
+  year: string;
+  genre: string;
+  comment: string;
+}
+
+export interface AudioAdvancedOptions {
+  bitrateType: 'constant' | 'variable';
+  constantBitrate: number;
+  variableBitrate: number; // 0..9
+  sampleRate: number;
+  channels: number;
+  fadeIn: boolean;
+  fadeOut: boolean;
+  reverse: boolean;
+  fastMode?: boolean;
+}
 
 export interface ConversionOptions {
   mediaType: MediaType;
@@ -238,6 +426,13 @@ export interface ConversionOptions {
   vcodec: string;
   acodec: string;
   noAudio: boolean;
+  convertFrom?: string;
+  originalFilename?: string;
+  audioAdvanced?: AudioAdvancedOptions;
+  trackInfo?: TrackInfo;
+  targetFilesizeMb?: number; // Target output size in MB
+  vb?: number; // Explicit video bitrate kbps
+  ab?: number; // Explicit audio bitrate kbps
 }
 
 export type ConversionPhase = 'idle' | 'uploading' | 'encoding' | 'completed' | 'error';
@@ -247,6 +442,7 @@ export interface ConversionResult {
   browserFilename: string;
   publicFilename?: string;
   filesize?: number;
+  uid?: string;
 }
 
 export interface ConversionState {
@@ -266,4 +462,9 @@ export interface SelectedDriveFile {
   sizeBytes: number;
   mimeType: string;
   parentFolderId?: string;
+  videoMetadata?: {
+    width?: number;
+    height?: number;
+    durationMillis?: number;
+  };
 }

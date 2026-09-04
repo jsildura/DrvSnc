@@ -236,6 +236,52 @@ export const DriveItemOwnerSchema = z.object({
   picture: z.string().optional(),
 });
 
+export const VideoMediaMetadataSchema = z.object({
+  width: z.number().int().nonnegative().nullable().optional(),
+  height: z.number().int().nonnegative().nullable().optional(),
+  durationMillis: z.string().or(z.number()).nullable().optional(),
+});
+export type VideoMediaMetadata = z.infer<typeof VideoMediaMetadataSchema>;
+
+export function detectVideoQuality(
+  videoMetadata?: { width?: number | null; height?: number | null } | null,
+  filename?: string | null
+): string | null {
+  const height = videoMetadata?.height;
+  const width = videoMetadata?.width;
+
+  if (typeof height === 'number' && height > 0) {
+    if (height >= 2160 || (typeof width === 'number' && width >= 3840)) return '4K';
+    if (height >= 1440 || (typeof width === 'number' && width >= 2560)) return '1440p';
+    if (height >= 1080 || (typeof width === 'number' && width >= 1920)) return '1080p';
+    if (height >= 720 || (typeof width === 'number' && width >= 1280)) return '720p';
+    if (height >= 480 || (typeof width === 'number' && width >= 854)) return '480p';
+    if (height >= 360) return '360p';
+    if (height >= 240) return '240p';
+    return `${height}p`;
+  }
+
+  if (typeof width === 'number' && width > 0) {
+    if (width >= 3840) return '4K';
+    if (width >= 2560) return '1440p';
+    if (width >= 1920) return '1080p';
+    if (width >= 1280) return '720p';
+    if (width >= 854) return '480p';
+    if (width >= 640) return '360p';
+  }
+
+  if (filename) {
+    const match = filename.match(/(?:^|[^a-zA-Z0-9])(4k|2160p|1440p|2k|1080p|720p|480p|360p|240p)(?=[^a-zA-Z0-9]|$)/i);
+    if (match) {
+      const q = match[1].toUpperCase();
+      if (q === '4K' || q === '2K') return q;
+      return match[1].toLowerCase();
+    }
+  }
+
+  return null;
+}
+
 export const DriveItemViewSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -251,6 +297,8 @@ export const DriveItemViewSchema = z.object({
   webViewLink: z.string().nullable().optional(),
   owners: z.array(DriveItemOwnerSchema).optional(),
   parents: z.array(z.string()).optional(),
+  videoMediaMetadata: VideoMediaMetadataSchema.optional(),
+  videoQuality: z.string().nullable().optional(),
 });
 
 export type DriveItemView = z.infer<typeof DriveItemViewSchema>;

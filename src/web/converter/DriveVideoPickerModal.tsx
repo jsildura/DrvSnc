@@ -28,13 +28,98 @@ const VIDEO_EXTENSIONS = new Set([
   'mpeg',
 ]);
 
-function isVideoItem(item: DriveItemView): boolean {
-  if (item.isFolder) return false;
-  if (item.mimeType && (item.mimeType.startsWith('video/') || item.mimeType === 'application/vnd.google-apps.video')) {
-    return true;
+const AUDIO_EXTENSIONS = new Set([
+  'mp3',
+  'wav',
+  'm4a',
+  'm4r',
+  'flac',
+  'ogg',
+  'oga',
+  'opus',
+  'mp2',
+  'amr',
+  'aac',
+  'wma',
+  'aiff',
+  'aif',
+  'alac',
+  'ape',
+  'ac3',
+  'dts',
+  'mid',
+  'midi',
+]);
+
+const DOCUMENT_EXTENSIONS = new Set([
+  'pdf',
+  'doc',
+  'docx',
+  'txt',
+  'rtf',
+  'odt',
+  'html',
+  'htm',
+  'epub',
+  'mobi',
+  'xlsx',
+  'xls',
+  'pptx',
+  'ppt',
+  'csv',
+  'xml',
+]);
+
+function getFileIcon(item: DriveItemView) {
+  const mime = item.mimeType || '';
+  const ext = item.name.split('.').pop()?.toLowerCase() || '';
+
+  if (
+    mime.startsWith('audio/') ||
+    mime === 'application/ogg' ||
+    mime === 'application/x-flac' ||
+    AUDIO_EXTENSIONS.has(ext)
+  ) {
+    return (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+      </svg>
+    );
   }
-  const ext = item.name.split('.').pop()?.toLowerCase();
-  return Boolean(ext && VIDEO_EXTENSIONS.has(ext));
+
+  if (
+    mime.startsWith('video/') ||
+    mime === 'application/vnd.google-apps.video' ||
+    VIDEO_EXTENSIONS.has(ext)
+  ) {
+    return (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    );
+  }
+
+  if (
+    mime.includes('pdf') ||
+    mime.includes('document') ||
+    mime.includes('spreadsheet') ||
+    mime.includes('presentation') ||
+    mime.includes('text') ||
+    DOCUMENT_EXTENSIONS.has(ext)
+  ) {
+    return (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+    </svg>
+  );
 }
 
 function formatBytes(bytes: number): string {
@@ -139,8 +224,8 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
     () => (isSearchActive ? [] : displayItems.filter((i) => i.isFolder)),
     [isSearchActive, displayItems]
   );
-  const videoFiles = useMemo(
-    () => displayItems.filter((i) => isVideoItem(i)),
+  const files = useMemo(
+    () => displayItems.filter((i) => !i.isFolder),
     [displayItems]
   );
 
@@ -152,6 +237,16 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         sizeBytes: selectedItem.size || 0,
         mimeType: selectedItem.mimeType,
         parentFolderId: selectedItem.parents?.[0] || currentFolderId,
+        videoMetadata: selectedItem.videoMediaMetadata
+          ? {
+              width: selectedItem.videoMediaMetadata.width ?? undefined,
+              height: selectedItem.videoMediaMetadata.height ?? undefined,
+              durationMillis:
+                selectedItem.videoMediaMetadata.durationMillis != null
+                  ? Number(selectedItem.videoMediaMetadata.durationMillis)
+                  : undefined,
+            }
+          : undefined,
       });
       onClose();
     }
@@ -166,16 +261,16 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
               </svg>
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">
-                Select Video from Google Drive
+                Select File from Google Drive
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Browse your Drive folders and pick a video file to convert
+                Browse your Drive folders and pick a file to convert
               </p>
             </div>
           </div>
@@ -206,7 +301,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search all videos in Google Drive (e.g. .mp4, mkv, title)..."
+              placeholder="Search files in Google Drive (e.g. .mp4, .mp3, .pdf, .docx)..."
               className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
             />
             {searchQuery && (
@@ -281,13 +376,13 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                 {isSearchActive ? 'Searching all Google Drive folders...' : 'Loading Drive contents...'}
               </span>
             </div>
-          ) : folders.length === 0 && videoFiles.length === 0 ? (
+          ) : folders.length === 0 && files.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-slate-400 dark:text-slate-500">
               <svg className="w-10 h-10 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
               </svg>
               <span className="text-sm font-medium">
-                {isSearchActive ? `No videos matching "${debouncedQuery}" found` : 'No video files found in this folder'}
+                {isSearchActive ? `No files matching "${debouncedQuery}" found` : 'No files found in this folder'}
               </span>
               <span className="text-xs mt-0.5">
                 {isSearchActive
@@ -323,18 +418,18 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                 </div>
               )}
 
-              {/* Video Files List */}
-              {videoFiles.length > 0 && (
+              {/* Files List */}
+              {files.length > 0 && (
                 <div>
                   <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1.5 px-1">
                     {isSearchActive
-                      ? `Search Results (${videoFiles.length} video${videoFiles.length === 1 ? '' : 's'})`
-                      : `Video Files (${videoFiles.length})`}
+                      ? `Search Results (${files.length} file${files.length === 1 ? '' : 's'})`
+                      : `Files (${files.length})`}
                   </h4>
                   <div className="space-y-1.5">
-                    {videoFiles.map((file) => {
+                    {files.map((file) => {
                       const isSelected = selectedItem?.id === file.id;
-                      const ext = file.name.split('.').pop()?.toUpperCase() || 'VIDEO';
+                      const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
                       return (
                         <div
                           key={file.id}
@@ -347,6 +442,16 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                               sizeBytes: file.size || 0,
                               mimeType: file.mimeType,
                               parentFolderId: currentFolderId,
+                              videoMetadata: file.videoMediaMetadata
+                                ? {
+                                    width: file.videoMediaMetadata.width ?? undefined,
+                                    height: file.videoMediaMetadata.height ?? undefined,
+                                    durationMillis:
+                                      file.videoMediaMetadata.durationMillis != null
+                                        ? Number(file.videoMediaMetadata.durationMillis)
+                                        : undefined,
+                                  }
+                                : undefined,
                             });
                             onClose();
                           }}
@@ -358,10 +463,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
+                              {getFileIcon(file)}
                             </div>
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
@@ -395,7 +497,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         {/* Modal Footer */}
         <div className="p-3.5 sm:p-4 bg-slate-50 dark:bg-slate-850 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[280px]">
-            {selectedItem ? `Selected: ${selectedItem.name}` : 'Select a video to continue'}
+            {selectedItem ? `Selected: ${selectedItem.name}` : 'Select a file to continue'}
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -411,7 +513,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               onClick={handleConfirm}
               className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              Choose Video
+              Choose File
             </button>
           </div>
         </div>

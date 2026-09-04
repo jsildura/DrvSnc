@@ -460,5 +460,126 @@ describe('Drive destructive actions (grid view)', () => {
     expect(screen.getByText('keep_me.txt')).toBeDefined();
     expect(screen.queryByText('quarterly_report.pdf')).toBeNull();
   });
+
+  it('clicking Convert Video stores the file metadata in sessionStorage and switches tab', async () => {
+    sessionStorage.clear();
+    const mockVideo = {
+      id: 'vid-99',
+      name: '5143bced42c3-preview1.mp4',
+      mimeType: 'video/mp4',
+      isFolder: false,
+      shared: false,
+      trashed: false,
+      size: 6312427,
+      modifiedTime: new Date().toISOString(),
+      parents: ['folder-parent-123'],
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(JSON.stringify({ items: [mockVideo], nextPageToken: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('5143bced42c3-preview1.mp4')).toBeDefined();
+    });
+
+    const convertBtn = screen.getByTitle('Convert Video');
+    expect(convertBtn).toBeDefined();
+
+    fireEvent.click(convertBtn);
+
+    const storedRaw = sessionStorage.getItem('gdu_pending_converter_file');
+    expect(storedRaw).not.toBeNull();
+    const stored = JSON.parse(storedRaw!);
+    expect(stored.id).toBe('vid-99');
+    expect(stored.name).toBe('5143bced42c3-preview1.mp4');
+    expect(stored.sizeBytes).toBe(6312427);
+    expect(stored.mimeType).toBe('video/mp4');
+    expect(stored.parentFolderId).toBe('folder-parent-123');
+  });
+
+  it('displays detected max video quality badge on video files in grid and list views', async () => {
+    localStorage.setItem('gdu_drive_view_mode', 'grid');
+    const mockVideos = [
+      {
+        id: 'vid-1080',
+        name: '5143bced42c3-preview1.mp4',
+        mimeType: 'video/mp4',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 6312427,
+        modifiedTime: new Date().toISOString(),
+        videoMediaMetadata: { width: 1920, height: 1080 },
+        videoQuality: '1080p',
+      },
+      {
+        id: 'vid-720',
+        name: 'nature_clip_720p.mkv',
+        mimeType: 'video/x-matroska',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 3500000,
+        modifiedTime: new Date().toISOString(),
+        videoMediaMetadata: { width: 1280, height: 720 },
+      },
+      {
+        id: 'vid-4k',
+        name: 'drone_cinematic_4k.mp4',
+        mimeType: 'video/mp4',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 15000000,
+        modifiedTime: new Date().toISOString(),
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(JSON.stringify({ items: mockVideos, nextPageToken: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('5143bced42c3-preview1.mp4')).toBeDefined();
+      expect(screen.getByText('1080p')).toBeDefined();
+      expect(screen.getByText('720p')).toBeDefined();
+      expect(screen.getByText('4K')).toBeDefined();
+    });
+
+    // Check that format badges (MP4, MKV) are also present
+    expect(screen.getAllByText('MP4').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('MKV')).toBeDefined();
+  });
 });
 

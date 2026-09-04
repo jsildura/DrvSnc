@@ -8,6 +8,7 @@ import {
   PermissionView,
   PermissionRole,
   PermissionType,
+  detectVideoQuality,
 } from '../../shared/contracts';
 
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
@@ -125,6 +126,31 @@ export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView 
     webViewLink: typeof raw.webViewLink === 'string' ? raw.webViewLink : null,
     owners,
     parents: Array.isArray(raw.parents) ? (raw.parents as string[]) : undefined,
+    videoMediaMetadata: raw.videoMediaMetadata
+      ? {
+          width:
+            typeof (raw.videoMediaMetadata as Record<string, unknown>).width === 'number'
+              ? ((raw.videoMediaMetadata as Record<string, unknown>).width as number)
+              : (raw.videoMediaMetadata as Record<string, unknown>).width
+              ? parseInt(String((raw.videoMediaMetadata as Record<string, unknown>).width), 10) || undefined
+              : undefined,
+          height:
+            typeof (raw.videoMediaMetadata as Record<string, unknown>).height === 'number'
+              ? ((raw.videoMediaMetadata as Record<string, unknown>).height as number)
+              : (raw.videoMediaMetadata as Record<string, unknown>).height
+              ? parseInt(String((raw.videoMediaMetadata as Record<string, unknown>).height), 10) || undefined
+              : undefined,
+          durationMillis:
+            typeof (raw.videoMediaMetadata as Record<string, unknown>).durationMillis === 'number' ||
+            typeof (raw.videoMediaMetadata as Record<string, unknown>).durationMillis === 'string'
+              ? ((raw.videoMediaMetadata as Record<string, unknown>).durationMillis as string | number)
+              : undefined,
+        }
+      : undefined,
+    videoQuality: detectVideoQuality(
+      raw.videoMediaMetadata as { width?: number | null; height?: number | null } | undefined,
+      String(raw.name || '')
+    ),
   };
 }
 
@@ -236,7 +262,7 @@ export async function withDriveAuth<T>(
 }
 
 const DRIVE_FILE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents';
+  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata';
 
 export async function listItems(
   env: Env,

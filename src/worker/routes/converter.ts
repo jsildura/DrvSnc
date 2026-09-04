@@ -158,6 +158,55 @@ async function getOrResolveState(): Promise<{ sEncoder: string; uidCookie: strin
   return { sEncoder, uidCookie };
 }
 
+let cachedDocState: CachedConverterState | null = null;
+
+async function getOrResolveDocState(): Promise<{ sEncoder: string; uidCookie: string }> {
+  const now = Date.now();
+  if (cachedDocState && now - cachedDocState.fetchedAt < CACHE_TTL_MS) {
+    return { sEncoder: cachedDocState.sEncoder, uidCookie: cachedDocState.uidCookie };
+  }
+
+  let sEncoder = 's98.convert.io';
+  let uidCookie = generateUid();
+
+  try {
+    const res = await fetch('https://convert.io/pdf-to-docx', {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+
+    if (res.ok) {
+      const setCookie = res.headers.get('set-cookie');
+      if (setCookie) {
+        const uidMatch = setCookie.match(/uid=([a-zA-Z0-9_-]+)/);
+        if (uidMatch && uidMatch[1]) {
+          uidCookie = uidMatch[1];
+        }
+      }
+
+      const html = await res.text();
+      const match = html.match(/"s_encoder":\s*"([^"]+)"/);
+      if (match && match[1]) {
+        sEncoder = match[1];
+      }
+    }
+  } catch {
+    // Keep defaults
+  }
+
+  cachedDocState = {
+    sEncoder,
+    uidCookie,
+    fetchedAt: now,
+  };
+
+  return { sEncoder, uidCookie };
+}
+
 const COMMON_CHROME_HEADERS: Record<string, string> = {
   Origin: 'https://video-converter.com',
   Referer: 'https://video-converter.com/',
@@ -190,10 +239,11 @@ export const converterRoutes = new Hono<{
   };
 }>();
 
-// Exempt /stream endpoints from session cookie check since remote encoder uses HMAC signed ticket
+// Exempt /stream and /download endpoints from session cookie check since remote encoder uses HMAC signed ticket
+// and /download is a safe proxy for converted output from whitelisted encoder clusters
 converterRoutes.use('/*', async (c, next) => {
   const path = c.req.path;
-  if (path.includes('/converter/stream')) {
+  if (path.includes('/converter/stream') || path.includes('/converter/download')) {
     return next();
   }
   return requireSession(c, next);
@@ -295,9 +345,20 @@ converterRoutes.on(['GET', 'HEAD'], '/stream/:filename', handleStreamRequest);
 
 // GET /api/v1/converter/config
 converterRoutes.get('/config', async (c) => {
-  const { sEncoder } = await getOrResolveState();
-  // Fresh UID token for this conversion session to reset the daily conversion counter
+  const mediaType = c.req.query('mediaType');
   const freshUid = generateUid();
+
+  if (mediaType === 'document') {
+    const { sEncoder } = await getOrResolveDocState();
+    return c.json({
+      sEncoder,
+      siteId: 'convert',
+      uid: freshUid,
+      nodes: ['s98.convert.io', 's61.convert.io', 's49.convert.io', 's1.convert.io'],
+    });
+  }
+
+  const { sEncoder } = await getOrResolveState();
   return c.json({
     sEncoder,
     siteId: 'vconv',
@@ -325,14 +386,17 @@ converterRoutes.get('/ws', async (c) => {
   const sEncoder = requestedEncoder || defaultEncoder;
   const uid = requestedUid || defaultUid;
 
+  const isConvertIo = sEncoder.includes('convert.io');
+  const originUrl = isConvertIo ? 'https://convert.io' : 'https://video-converter.com';
+
   const upstreamWsUrl = `https://${sEncoder}/socket.io/?EIO=4&transport=websocket`;
 
   try {
     const upstreamRes = await fetch(upstreamWsUrl, {
       headers: {
         Upgrade: 'websocket',
-        Origin: 'https://video-converter.com',
-        Referer: 'https://video-converter.com/',
+        Origin: originUrl,
+        Referer: `${originUrl}/`,
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Cookie: `uid=${uid}`,
@@ -408,44 +472,112 @@ converterRoutes.get('/ws', async (c) => {
   }
 });
 
+// Helper to format download response with robust attachment header
+function handleDownloadResponse(c: any, upstream: Response, parsed: URL): Response {
+  const headers = new Headers();
+  const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+  const contentLength = upstream.headers.get('content-length');
+  const rawFilename = c.req.query('filename') || parsed.pathname.split('/').pop() || 'converted_file';
+  const asciiFilename = rawFilename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '\\"');
+  const encodedFilename = encodeURIComponent(rawFilename);
+
+  headers.set('Content-Type', contentType);
+  if (contentLength) headers.set('Content-Length', contentLength);
+  headers.set(
+    'Content-Disposition',
+    `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`
+  );
+
+  return new Response(upstream.body, {
+    status: 200,
+    headers,
+  });
+}
+
 // GET /api/v1/converter/download
-// Proxies download of converted video injecting required Referer and cookies to bypass hotlink protection
+// Proxies download of converted video/audio injecting required Referer and cookies to bypass hotlink protection
 converterRoutes.get('/download', async (c) => {
-  const fileUrl = c.req.query('url');
+  let fileUrl = c.req.query('url');
   if (!fileUrl) {
     return c.text('Missing file URL', 400);
   }
 
   try {
+    const rawTarget = fileUrl;
+    // 123apps returns s*.online-audio-converter.com which lacks DNS records;
+    // real encoder servers live under s*.video-converter.com
+    fileUrl = fileUrl.replace(/([a-zA-Z0-9_-]+)\.online-audio-converter\.com/g, '$1.video-converter.com');
     const parsed = new URL(fileUrl);
-    if (!parsed.hostname.endsWith('.video-converter.com') && parsed.hostname !== 'video-converter.com') {
+    const ALLOWED_CONVERTER_DOMAINS = [
+      'video-converter.com',
+      'online-audio-converter.com',
+      '123apps.com',
+      '123apps.org',
+      'audio-converter.com',
+      'convert.io',
+      '123apps.io',
+    ];
+    const isAllowed = ALLOWED_CONVERTER_DOMAINS.some(
+      (d) => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`)
+    );
+    if (!isAllowed) {
       return c.text('Forbidden host', 403);
     }
 
     const { uidCookie: defaultUid } = await getOrResolveState();
     const uid = c.req.query('uid') || defaultUid;
 
+    const isDoc =
+      parsed.pathname.includes('/convert/') ||
+      parsed.hostname.includes('convert.io') ||
+      c.req.query('mediaType') === 'document';
+
+    const isAudio =
+      parsed.pathname.includes('/aconv/') ||
+      rawTarget.includes('online-audio') ||
+      c.req.query('mediaType') === 'audio';
+
+    const originUrl = isDoc
+      ? 'https://convert.io'
+      : isAudio
+      ? 'https://online-audio-converter.com'
+      : 'https://video-converter.com';
+
     const upstream = await fetch(fileUrl, {
       headers: {
         ...COMMON_CHROME_HEADERS,
+        Origin: originUrl,
+        Referer: `${originUrl}/`,
         Cookie: `uid=${uid}`,
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
       },
     });
 
-    const headers = new Headers();
-    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
-    const contentLength = upstream.headers.get('content-length');
-    const contentDisposition = upstream.headers.get('content-disposition');
-    headers.set('Content-Type', contentType);
-    if (contentLength) headers.set('Content-Length', contentLength);
-    if (contentDisposition) headers.set('Content-Disposition', contentDisposition);
+    if (!upstream.ok) {
+      // Fallback: try alternate 123apps origin in case upstream node expects video-converter vs audio-converter
+      const fallbackOrigin = isAudio
+        ? 'https://video-converter.com'
+        : 'https://online-audio-converter.com';
+      const fallbackRes = await fetch(fileUrl, {
+        headers: {
+          ...COMMON_CHROME_HEADERS,
+          Origin: fallbackOrigin,
+          Referer: `${fallbackOrigin}/`,
+          Cookie: `uid=${uid}`,
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+      });
 
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers,
-    });
+      if (fallbackRes.ok) {
+        return handleDownloadResponse(c, fallbackRes, parsed);
+      }
+
+      return c.text(`Download failed from upstream converter (status ${upstream.status})`, upstream.status as any);
+    }
+
+    return handleDownloadResponse(c, upstream, parsed);
   } catch {
     return c.text('Failed to download file', 502);
   }
@@ -458,16 +590,25 @@ converterRoutes.post('/flow', async (c) => {
   const { sEncoder: defaultEncoder, uidCookie: defaultUid } = await getOrResolveState();
   const requestedEncoder = c.req.query('encoder');
   const requestedUid = c.req.query('uid');
+  const requestedSiteId = c.req.query('site_id') || 'vconv';
   const sEncoder = requestedEncoder || defaultEncoder;
   const uid = requestedUid || defaultUid;
 
-  const targetUrl = `https://${sEncoder}/vconv/upload/flow/${query ? `?${query}` : ''}`;
+  const targetUrl = `https://${sEncoder}/${requestedSiteId}/upload/flow/${query ? `?${query}` : ''}`;
 
   const contentType = c.req.header('content-type') || '';
   const contentLength = c.req.header('content-length');
 
+  const originUrl =
+    requestedSiteId === 'convert'
+      ? 'https://convert.io'
+      : requestedSiteId === 'aconv'
+      ? 'https://online-audio-converter.com'
+      : 'https://video-converter.com';
   const forwardHeaders: Record<string, string> = {
     ...COMMON_CHROME_HEADERS,
+    Origin: originUrl,
+    Referer: `${originUrl}/`,
     Cookie: `uid=${uid}`,
   };
 
@@ -505,6 +646,85 @@ converterRoutes.post('/flow', async (c) => {
           requestId: c.get('requestId') || 'req-id',
         },
       },
+      502
+    );
+  }
+});
+
+// POST /api/v1/converter/process
+// Proxies document conversion process call to convert.io with valid origin and cookies
+converterRoutes.post('/process', async (c) => {
+  let body: {
+    encoder?: string;
+    siteId?: string;
+    uid?: string;
+    operationId?: string;
+    convertFrom?: string;
+    convertTo?: string;
+    tmpFilename?: string;
+    settings?: Record<string, any>;
+  };
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.text('Invalid JSON', 400);
+  }
+
+  const {
+    encoder = 's98.convert.io',
+    siteId = 'convert',
+    uid = generateUid(),
+    operationId = `${Date.now()}_${encoder.replace(/[^a-zA-Z0-9]/g, '')}_${Math.random().toString(36).substring(2, 8)}`,
+    convertFrom,
+    convertTo,
+    tmpFilename,
+  } = body;
+
+  if (!tmpFilename || !convertFrom || !convertTo) {
+    return c.json(
+      { error: 1, error_title: 'Missing required parameters (tmpFilename, convertFrom, convertTo)' },
+      400
+    );
+  }
+
+  const targetUrl = `https://${encoder}/${siteId}/process/`;
+  const postParams = new URLSearchParams({
+    site_id: siteId,
+    codebase_id: siteId,
+    uid,
+    operation_id: operationId,
+    action_type: 'process',
+    convert_from: convertFrom,
+    convert_to: convertTo,
+    tmp_filename: tmpFilename,
+  });
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Origin: 'https://convert.io',
+        Referer: 'https://convert.io/',
+        Cookie: `uid=${uid}`,
+        'User-Agent': COMMON_CHROME_HEADERS['User-Agent'],
+      },
+      body: postParams.toString(),
+    });
+
+    const responseText = await upstream.text();
+    let jsonResult: any;
+    try {
+      jsonResult = JSON.parse(responseText);
+    } catch {
+      return c.json({ error: 1, error_title: responseText || 'Invalid upstream response' }, 502);
+    }
+
+    return c.json(jsonResult);
+  } catch (err) {
+    return c.json(
+      { error: 1, error_title: (err as Error).message || 'Failed to proxy conversion request' },
       502
     );
   }

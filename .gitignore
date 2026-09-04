@@ -97,3 +97,5 @@ src/options/
 docs/bug-audit-2026-08.md
 video_conversion_implementation_plan.md
 video-converter/
+audio-converter-js/
+convertio-js/

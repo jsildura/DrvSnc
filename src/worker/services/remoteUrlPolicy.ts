@@ -215,7 +215,11 @@ export async function fetchRemoteWithPolicy(
   maxRedirects = 5,
   redirectCount = 0
 ): Promise<Response> {
-  const validation = validateRemoteUrl(urlStr);
+  // Normalize encoder hostnames lacking DNS records (e.g. s97.online-audio-converter.com -> s97.video-converter.com)
+  const isAudioConverter = urlStr.includes('online-audio-converter.com') || urlStr.includes('/aconv/');
+  const effectiveUrl = urlStr.replace(/([a-zA-Z0-9_-]+)\.online-audio-converter\.com/g, '$1.video-converter.com');
+
+  const validation = validateRemoteUrl(effectiveUrl);
   if (!validation.valid) {
     throw new Error(`SSRF policy violation: ${validation.error}`);
   }
@@ -225,7 +229,13 @@ export async function fetchRemoteWithPolicy(
   }
 
   const sanitizedHeaders = new Headers(init?.headers);
-  if (urlStr.includes('video-converter.com')) {
+  if (isAudioConverter) {
+    sanitizedHeaders.set('Referer', 'https://online-audio-converter.com/');
+    sanitizedHeaders.set('Origin', 'https://online-audio-converter.com');
+  } else if (effectiveUrl.includes('convert.io') || effectiveUrl.includes('/convert/')) {
+    sanitizedHeaders.set('Referer', 'https://convert.io/');
+    sanitizedHeaders.set('Origin', 'https://convert.io');
+  } else if (effectiveUrl.includes('video-converter.com')) {
     sanitizedHeaders.set('Referer', 'https://video-converter.com/');
     sanitizedHeaders.set('Origin', 'https://video-converter.com');
   }
@@ -235,7 +245,7 @@ export async function fetchRemoteWithPolicy(
     sanitizedHeaders.delete('Cookie');
   }
 
-  const response = await fetch(urlStr, {
+  const response = await fetch(effectiveUrl, {
     ...init,
     headers: sanitizedHeaders,
     redirect: 'manual',
