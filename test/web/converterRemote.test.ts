@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createStreamTicket, importRemoteVideoToEncoder } from '../../src/web/converter/converterClient';
+import {
+  createStreamTicket,
+  importRemoteVideoToEncoder,
+  startEncodingJob,
+} from '../../src/web/converter/converterClient';
 import * as apiClient from '../../src/web/api/client';
 
 describe('Remote Video Conversion & Direct Streaming', () => {
@@ -105,5 +109,99 @@ describe('Remote Video Conversion & Direct Streaming', () => {
     expect(openRemotePacket).toBeDefined();
     expect(openRemotePacket).toContain('https://worker.dev/stream.mp4?ticket=123');
     expect(openRemotePacket).toContain('sample.mp4');
+  });
+
+  it('startEncodingJob sends preset_priority: true, preset: hd720p, vcodec: h265, and computed vb for video jobs', async () => {
+    const sentMessages: string[] = [];
+    let mockWsInstance: any = null;
+
+    class MockWebSocket {
+      readyState = 1; // WebSocket.OPEN
+      onopen: (() => void) | null = null;
+      onmessage: ((ev: { data: any }) => void) | null = null;
+      onerror: ((err: any) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor() {
+        mockWsInstance = this;
+        setTimeout(() => {
+          this.onopen?.();
+          // Engine.IO handshake
+          this.onmessage?.({ data: '0{"sid":"mock-enc-sid"}' });
+        }, 10);
+      }
+
+      send(data: string) {
+        sentMessages.push(data);
+
+        if (data === '40') {
+          setTimeout(() => {
+            this.onmessage?.({ data: '40' });
+          }, 10);
+        }
+
+        if (data.startsWith('42["encode"')) {
+          setTimeout(() => {
+            this.onmessage?.({
+              data: '42["encode",{"message_type":"final_result","download_url":"https://s72.video-converter.com/vconv/d/converted.mp4","browser_filename":"converted.mp4"}]',
+            });
+          }, 20);
+        }
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+
+    vi.stubGlobal('WebSocket', MockWebSocket);
+
+    let completedResult: any = null;
+    await new Promise<void>((resolve) => {
+      startEncodingJob(
+        's72.video-converter.com',
+        'tmp_video_123.mp4',
+        20, // 20s duration
+        {
+          mediaType: 'video',
+          format: 'mp4',
+          preset: 'hd720p',
+          vcodec: 'h265',
+          acodec: 'aac',
+          noAudio: false,
+          targetFilesizeMb: 11,
+          ab: 80,
+        },
+        {
+          onComplete: (res) => {
+            completedResult = res;
+            resolve();
+          },
+        }
+      );
+    });
+
+    expect(completedResult).toBeDefined();
+    expect(completedResult.browserFilename).toBe('converted.mp4');
+
+    // Inspect the emitted encode packet
+    const encodePacketStr = sentMessages.find((m) => m.startsWith('42["encode"'));
+    expect(encodePacketStr).toBeDefined();
+
+    const parsedPacket = JSON.parse(encodePacketStr!.substring(2));
+    expect(parsedPacket[0]).toBe('encode');
+    const payload = parsedPacket[1];
+
+    expect(payload.format_type).toBe('video');
+    expect(payload.format).toBe('mp4');
+    expect(payload.preset).toBe('hd720p');
+    expect(payload.vcodec).toBe('h265');
+    expect(payload.acodec).toBe('aac');
+    expect(payload.preset_priority).toBe(true); // MUST be true!
+    expect(payload.vb).toBeGreaterThanOrEqual(4000); // ~4426 kbps computed for 11 MB in 20s
+    expect(payload.ab).toBe(80);
+    expect(payload.ac).toBe(1); // 80 kbps mono
+    expect(payload.ar).toBe(44100);
   });
 });

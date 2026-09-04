@@ -21,7 +21,7 @@ import { AudioQualitySlider } from './AudioQualitySlider';
 import { AudioAdvancedSettings } from './AudioAdvancedSettings';
 import { AudioTrackInfoDrawer } from './AudioTrackInfoDrawer';
 import { VideoFilesizeSlider } from './VideoFilesizeSlider';
-import { calculateSliderBounds } from './filesizeEstimator';
+import { calculateSliderBounds, evaluateTargetSize } from './filesizeEstimator';
 import {
   fetchConverterConfig,
   createStreamTicket,
@@ -205,14 +205,40 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
 
   // Handle format change
   const handleFormatChange = (fmt: string) => {
+    setIsMoreFormatsOpen(false);
+    if (fmt === options.format) {
+      return;
+    }
+
     if (options.mediaType === 'video') {
       const config = VIDEO_FORMATS[fmt] || VIDEO_FORMATS.mp4;
+      const validPresets =
+        fmt === '3gp'
+          ? THREEGP_RESOLUTIONS.map((r) => r.id)
+          : Object.keys(config.presets || {});
+      const preservedPreset =
+        validPresets.includes(options.preset)
+          ? options.preset
+          : config.defaultPreset || (fmt === '3gp' ? '176x144' : 'same');
+
+      const validVcodecs = config.vcodecs || [];
+      const preservedVcodec =
+        validVcodecs.includes(options.vcodec)
+          ? options.vcodec
+          : config.defaults.vcodec || validVcodecs[0] || 'h264';
+
+      const validAcodecs = config.acodecs || [];
+      const preservedAcodec =
+        validAcodecs.includes(options.acodec)
+          ? options.acodec
+          : config.defaults.acodec || validAcodecs[0] || 'aac';
+
       setOptions((prev) => ({
         ...prev,
         format: fmt,
-        preset: config.defaultPreset || (fmt === '3gp' ? '176x144' : 'same'),
-        vcodec: config.defaults.vcodec || config.vcodecs?.[0] || 'h264',
-        acodec: config.defaults.acodec || config.acodecs?.[0] || 'aac',
+        preset: preservedPreset,
+        vcodec: preservedVcodec,
+        acodec: preservedAcodec,
       }));
     } else if (options.mediaType === 'audio') {
       const config = AUDIO_FORMATS[fmt] || AUDIO_FORMATS.mp3;
@@ -484,7 +510,7 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
     try {
       // 1. Fetch encoder config
       setConversion((prev) => ({ ...prev, statusText: 'Connecting to converter...' }));
-      const config = await fetchConverterConfig(options.mediaType);
+      const config = await fetchConverterConfig(optionsRef.current.mediaType);
       const uid = config.uid;
       if (uid) setSessionUid(uid);
 
@@ -526,7 +552,7 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
               selectedFile.name,
               {
                 uid,
-                mediaType: options.mediaType,
+                mediaType: optionsRef.current.mediaType,
                 signal: controller.signal,
                 onProgress: (percent) => {
                   setConversion((prev) => ({
@@ -564,7 +590,7 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
           {
             signal: controller.signal,
             uid,
-            mediaType: options.mediaType,
+            mediaType: optionsRef.current.mediaType,
             onProgress: (info) => {
               setConversion((prev) => ({
                 ...prev,
@@ -585,23 +611,38 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
         uploadProgress: 100,
         encodeProgress: 0,
         statusText:
-          options.mediaType === 'audio'
+          optionsRef.current.mediaType === 'audio'
             ? 'Converting audio...'
-            : options.mediaType === 'document'
+            : optionsRef.current.mediaType === 'document'
             ? 'Converting document...'
             : 'Converting video...',
       }));
 
       const actualDocSourceExt = selectedFile?.name
         ? selectedFile.name.split('.').pop()?.toLowerCase() || 'pdf'
-        : options.convertFrom || 'pdf';
+        : optionsRef.current.convertFrom || 'pdf';
+
+      const liveOptions = optionsRef.current;
+      const targetMb = customTargetMb ?? sliderBounds.defaultMb;
+      const currentDims = currentResolutionDimensions;
+      const evalResult = evaluateTargetSize(
+        targetMb,
+        sliderBounds,
+        currentDims.width,
+        currentDims.height,
+        liveOptions.noAudio,
+        128
+      );
 
       const job = startEncodingJob(
         config.sEncoder,
         uploadRes.tmpFilename,
         uploadRes.durationInSeconds,
         {
-          ...options,
+          ...liveOptions,
+          targetFilesizeMb: liveOptions.mediaType === 'video' ? targetMb : liveOptions.targetFilesizeMb,
+          vb: liveOptions.mediaType === 'video' ? evalResult.videoBitrateKbps : liveOptions.vb,
+          ab: liveOptions.mediaType === 'video' ? evalResult.audioBitrateKbps : liveOptions.ab,
           uid,
           convertFrom: actualDocSourceExt,
           originalFilename: selectedFile.name,

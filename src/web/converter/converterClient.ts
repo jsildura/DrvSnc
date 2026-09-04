@@ -5,6 +5,8 @@ import {
   VIDEO_FORMATS,
   AUDIO_FORMATS,
   MediaType,
+  VIDEO_RESOLUTIONS,
+  THREEGP_RESOLUTIONS,
 } from './types';
 
 export interface ConverterConfig {
@@ -669,24 +671,38 @@ export function startEncodingJob(
           if (options.vcodec) encodePayload.vcodec = options.vcodec;
           if (options.acodec && !options.noAudio) encodePayload.acodec = options.acodec;
 
-          // If a custom target file size or explicit bitrate is set, compute vb and tell encoder to prioritize target bitrate
+          // Always supply audio bitrate and channels if audio is present
+          const audioBitrate = options.noAudio ? 0 : (options.ab || 128);
+          if (!options.noAudio) {
+            encodePayload.ab = audioBitrate;
+            encodePayload.ac = audioBitrate <= 80 ? 1 : 2;
+            encodePayload.ar = 44100;
+          }
+
+          // Video bitrate (vb): Always compute and supply vb, matching video-converter.com (vconv.js)
+          let videoBitrate = 0;
           if (options.targetFilesizeMb && options.targetFilesizeMb > 0) {
             const duration = durationInSeconds > 0 ? durationInSeconds : 60;
-            const audioBitrate = options.noAudio ? 0 : (options.ab || 128);
             const totalBits = options.targetFilesizeMb * 1024 * 1024 * 8;
             const audioBits = audioBitrate * 1024 * duration;
-            const computedVb = Math.max(10, Math.round((totalBits - audioBits) / duration / 1024));
-
-            encodePayload.vb = computedVb;
-            if (!options.noAudio) {
-              encodePayload.ab = audioBitrate;
-            }
-            encodePayload.preset_priority = false;
+            videoBitrate = Math.max(10, Math.round((totalBits - audioBits) / duration / 1024));
           } else if (options.vb && options.vb > 0) {
-            encodePayload.vb = options.vb;
-            if (options.ab && !options.noAudio) encodePayload.ab = options.ab;
-            encodePayload.preset_priority = false;
+            videoBitrate = options.vb;
+          } else {
+            const presetObj =
+              options.format === '3gp'
+                ? THREEGP_RESOLUTIONS.find((r) => r.id === options.preset)
+                : VIDEO_RESOLUTIONS.find((r) => r.id === options.preset);
+            videoBitrate = presetObj?.vb || 4500;
           }
+
+          if (videoBitrate > 0) {
+            encodePayload.vb = videoBitrate;
+          }
+
+          // IMPORTANT: preset_priority is ALWAYS true on video-converter.com (vconv.js: t.preset_priority = !0)
+          // Setting it to false causes 123apps FFmpeg server to bypass the preset (downscaling) and codec overrides.
+          encodePayload.preset_priority = true;
         }
 
         socket.send(`42["encode",${JSON.stringify(encodePayload)}]`);

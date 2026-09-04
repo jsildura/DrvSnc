@@ -721,6 +721,63 @@ describe('ConverterPage & ConverterPanel', () => {
     const convertBtn = screen.getByRole('button', { name: 'Convert' }) as HTMLButtonElement;
     expect(convertBtn.disabled).toBe(false);
   });
+
+  it('preserves resolution and codec selections when clicking active format or switching compatible formats', async () => {
+    const pendingVideo = {
+      id: 'vid-4k-123',
+      name: 'sunset_4k.mp4',
+      sizeBytes: 150000000,
+      mimeType: 'video/mp4',
+      videoMetadata: {
+        width: 3840,
+        height: 2160,
+        durationMillis: 20000,
+      },
+    };
+
+    sessionStorage.setItem('gdu_pending_converter_file', JSON.stringify(pendingVideo));
+
+    render(<ConverterPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('sunset_4k.mp4')).toBeDefined();
+    });
+
+    // 1. Open Resolution dropdown and select HD 720p
+    const resTrigger = screen.getByText('Same as source');
+    fireEvent.click(resTrigger);
+
+    const hd720Option = screen.getByText('HD 720p');
+    fireEvent.click(hd720Option);
+
+    // Verify HD 720p is displayed
+    expect(screen.getByText('HD 720p')).toBeDefined();
+    expect(screen.getByText('1280x720')).toBeDefined();
+
+    // 2. Open Settings and select H.265 / HEVC
+    const settingsBtn = screen.getByRole('button', { name: 'Settings' });
+    fireEvent.click(settingsBtn);
+
+    const codecSelect = screen.getByLabelText('Video Codec') as unknown as HTMLSelectElement;
+    fireEvent.change(codecSelect, { target: { value: 'h265' } });
+    expect(codecSelect.value).toBe('h265');
+
+    // 3. Re-click the 'mp4' button (already active format)
+    const mp4Btn = screen.getByRole('button', { name: 'mp4' });
+    fireEvent.click(mp4Btn);
+
+    // Verify HD 720p and h265 were NOT reset to default ('same' / 'h264')
+    expect(screen.getByText('HD 720p')).toBeDefined();
+    expect((screen.getByLabelText('Video Codec') as unknown as HTMLSelectElement).value).toBe('h265');
+
+    // 4. Switch to 'mkv' format (which also supports hd720p and h265)
+    const mkvBtn = screen.getByRole('button', { name: 'mkv' });
+    fireEvent.click(mkvBtn);
+
+    // Verify HD 720p and h265 were preserved across format switch
+    expect(screen.getByText('HD 720p')).toBeDefined();
+    expect((screen.getByLabelText('Video Codec') as unknown as HTMLSelectElement).value).toBe('h265');
+  });
 });
 
 
