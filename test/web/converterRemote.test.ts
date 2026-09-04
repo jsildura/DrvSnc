@@ -3,7 +3,9 @@ import {
   createStreamTicket,
   importRemoteVideoToEncoder,
   startEncodingJob,
+  cleanConvertedFilename,
 } from '../../src/web/converter/converterClient';
+import { CreateRemoteJobSchema } from '../../src/shared/contracts';
 import * as apiClient from '../../src/web/api/client';
 
 describe('Remote Video Conversion & Direct Streaming', () => {
@@ -203,5 +205,58 @@ describe('Remote Video Conversion & Direct Streaming', () => {
     expect(payload.ab).toBe(80);
     expect(payload.ac).toBe(1); // 80 kbps mono
     expect(payload.ar).toBe(44100);
+  });
+
+  describe('cleanConvertedFilename & Remote Job Schema Validation', () => {
+    it('strips query parameters and tickets from serverFilename when saving to Google Drive', () => {
+      const dirtyServerFilename =
+        'd65dbd2f0610d65dbd2f0610d65dbd2f0610d65dbd2f0610.mp4?ticket=eyJmaWQiOiIxRE9oUW9FRGFrZV84VjZwSXh4YkEzVzZzVThfRVNid1giLCJ1aWQiOiI4MmM4YWQ4ODdjYjliNjNkZjU0ZTZlZWRkNzJiOWQ5NiIsImZuIjoiZDY1ZGJkMmYwNjEwZDY1ZGJkMmYwNjEwZDY1ZGJkMmYwNjEwZDY1ZGJkMmYwNjEwLm1wNCIsImV.mp4';
+
+      const cleaned = cleanConvertedFilename(undefined, dirtyServerFilename, 'mp4');
+
+      expect(cleaned).toBe('d65dbd2f0610d65dbd2f0610d65dbd2f0610d65dbd2f0610.mp4');
+      expect(cleaned.length).toBeLessThanOrEqual(255);
+
+      // Verify that CreateRemoteJobSchema accepts it without throwing "Too big: expected string to have <=255 characters"
+      const parsed = CreateRemoteJobSchema.safeParse({
+        url: 'https://s72.video-converter.com/vconv/d/converted.mp4',
+        filename: cleaned,
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it('prefers originalFilename and updates extension to target format', () => {
+      const original = 'My Favorite Vacation Video 2026.MOV';
+      const dirtyServerFilename = 'vconv_converted_random123.mp4?ticket=secret';
+
+      const cleaned = cleanConvertedFilename(original, dirtyServerFilename, 'mkv');
+
+      expect(cleaned).toBe('My Favorite Vacation Video 2026.mkv');
+      expect(cleaned.length).toBeLessThanOrEqual(255);
+    });
+
+    it('enforces total filename length <= 255 characters even with giant names', () => {
+      const hugeName = 'a'.repeat(300) + '.mp4';
+
+      const cleaned = cleanConvertedFilename(hugeName, undefined, 'mp4');
+
+      expect(cleaned.length).toBeLessThanOrEqual(255);
+      expect(cleaned.endsWith('.mp4')).toBe(true);
+
+      const parsed = CreateRemoteJobSchema.safeParse({
+        url: 'https://s72.video-converter.com/vconv/d/converted.mp4',
+        filename: cleaned,
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it('replaces illegal filesystem and cloud characters with underscores', () => {
+      const dirtyName = 'my<video>:file*name?test"with|illegal/chars\\and%percent.avi';
+
+      const cleaned = cleanConvertedFilename(dirtyName, undefined, 'mp4');
+
+      expect(cleaned).not.toMatch(/[/\\?%*:|"<>]/);
+      expect(cleaned.endsWith('.mp4')).toBe(true);
+    });
   });
 });

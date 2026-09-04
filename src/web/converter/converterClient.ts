@@ -402,6 +402,66 @@ export async function uploadDriveVideoToEncoder(
 }
 
 /**
+ * Resolves and sanitizes the output filename for converted media/documents.
+ * Strips URL query parameters/hashes (e.g. ?ticket=...), removes illegal characters,
+ * and ensures the overall filename length is strictly <= 255 characters.
+ */
+export function cleanConvertedFilename(
+  originalFilename?: string,
+  serverFilename?: string,
+  targetFormat: string = 'mp4'
+): string {
+  const ext = (targetFormat || 'mp4').toLowerCase().replace(/^\.+/, '').trim() || 'mp4';
+  let base = '';
+
+  if (originalFilename) {
+    let cleanOrig = originalFilename;
+    try {
+      cleanOrig = decodeURIComponent(cleanOrig);
+    } catch {
+      // ignore
+    }
+    // Strip query strings or URL tokens if present in original filename
+    cleanOrig = cleanOrig.split(/[?#]/)[0];
+    base = cleanOrig.replace(/\.[^/.]+$/, '').trim();
+  }
+
+  if (!base && serverFilename) {
+    let cleanServer = serverFilename;
+    try {
+      cleanServer = decodeURIComponent(cleanServer);
+    } catch {
+      // ignore
+    }
+    // Strip query string (?ticket=...), hash, and any existing extensions
+    cleanServer = cleanServer.split(/[?#]/)[0];
+    base = cleanServer.replace(/\.[^/.]+$/, '').trim();
+  }
+
+  if (!base) {
+    base = 'converted';
+  }
+
+  // Remove illegal characters for filesystem & cloud storage
+  base = base.replace(/[/\\?%*:|"<>]/g, '_').trim();
+
+  // Strip trailing spaces or dots
+  base = base.replace(/[\s.]+$/, '').trim();
+
+  if (!base) {
+    base = 'converted';
+  }
+
+  // Enforce total filename length <= 255 characters (accounting for '.' and extension)
+  const maxBaseLen = Math.max(1, 255 - ext.length - 1);
+  if (base.length > maxBaseLen) {
+    base = base.substring(0, maxBaseLen);
+  }
+
+  return `${base}.${ext}`;
+}
+
+/**
  * Socket.IO v4 client over WebSocket to drive the ffmpeg encoding job on the 123apps encoder.
  */
 export function startEncodingJob(
@@ -461,10 +521,11 @@ export function startEncodingJob(
           downloadUrl = 'https:' + downloadUrl;
         }
 
-        const baseName = options.originalFilename
-          ? options.originalFilename.replace(/\.[^/.]+$/, '')
-          : 'converted';
-        const browserFilename = `${baseName}.${options.format}`;
+        const browserFilename = cleanConvertedFilename(
+          options.originalFilename,
+          undefined,
+          options.format
+        );
 
         callbacks.onComplete?.({
           downloadUrl,
@@ -732,9 +793,15 @@ export function startEncodingJob(
               }
               // Normalize hostnames lacking DNS (e.g. s*.online-audio-converter.com -> s*.video-converter.com)
               downloadUrl = downloadUrl.replace(/([a-zA-Z0-9_-]+)\.online-audio-converter\.com/g, '$1.video-converter.com');
+              const browserFilename = cleanConvertedFilename(
+                options.originalFilename,
+                data.browser_filename || data.public_filename,
+                options.format
+              );
+
               callbacks.onComplete?.({
                 downloadUrl,
-                browserFilename: data.browser_filename || `converted_${data.public_filename || options.format}`,
+                browserFilename,
                 publicFilename: data.public_filename,
                 uid: options?.uid,
               });

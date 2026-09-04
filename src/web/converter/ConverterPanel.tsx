@@ -28,6 +28,7 @@ import {
   importRemoteVideoToEncoder,
   uploadDriveVideoToEncoder,
   startEncodingJob,
+  cleanConvertedFilename,
   UploadResult,
 } from './converterClient';
 import { FolderPicker } from '../components/FolderPicker';
@@ -713,9 +714,15 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
       setSaveStatus('saving');
       setSaveError(null);
 
+      const cleanFilename = cleanConvertedFilename(
+        selectedFile?.name,
+        conversion.result.browserFilename,
+        options.format
+      );
+
       const job = await createRemoteUploadJob({
         url: conversion.result.downloadUrl,
-        filename: conversion.result.browserFilename,
+        filename: cleanFilename,
         folderId: destinationFolderId,
       });
 
@@ -1285,8 +1292,8 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">
                       Your converted file is ready!
                     </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {conversion.result.browserFilename}
+                    <p className="text-xs text-slate-500 dark:text-slate-400 font-mono break-all">
+                      {cleanConvertedFilename(selectedFile?.name, conversion.result.browserFilename, options.format)}
                     </p>
                   </div>
                 </div>
@@ -1337,8 +1344,8 @@ export function ConverterPanel({ initialFile }: ConverterPanelProps = {}) {
 
                     {/* Direct Download via proxy to bypass hotlink 403 */}
                     <a
-                      href={`/api/v1/converter/download?url=${encodeURIComponent(conversion.result.downloadUrl)}&filename=${encodeURIComponent(conversion.result.browserFilename)}&uid=${encodeURIComponent(conversion.result.uid || sessionUid || '')}&mediaType=${options.mediaType}`}
-                      download={conversion.result.browserFilename}
+                      href={`/api/v1/converter/download?url=${encodeURIComponent(conversion.result.downloadUrl)}&filename=${encodeURIComponent(cleanConvertedFilename(selectedFile?.name, conversion.result.browserFilename, options.format))}&uid=${encodeURIComponent(conversion.result.uid || sessionUid || '')}&mediaType=${options.mediaType}`}
+                      download={cleanConvertedFilename(selectedFile?.name, conversion.result.browserFilename, options.format)}
                       className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors"
                     >
                       Download to Computer
