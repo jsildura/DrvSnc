@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../env';
 import { requireSession, AuthenticatedSession } from '../middleware/session';
 import { AccountView } from '../../shared/contracts';
+import { downloadFile, getFileMetadata } from '../services/driveClient';
 
 interface CachedConverterState {
   sEncoder: string;
@@ -20,6 +21,93 @@ function generateUid(): string {
     uid += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return uid;
+}
+
+interface StreamTicketPayload {
+  fid: string; // fileId
+  uid: string; // userId
+  fn: string; // filename
+  exp: number; // expiry timestamp ms
+}
+
+function base64UrlEncode(buffer: ArrayBuffer | Uint8Array): string {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(str: string): Uint8Array {
+  let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4) {
+    base64 += '=';
+  }
+  const binary = atob(base64);
+  const buffer = new ArrayBuffer(binary.length);
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function signStreamTicket(secret: string, payload: StreamTicketPayload): Promise<string> {
+  const enc = new TextEncoder();
+  const payloadStr = JSON.stringify(payload);
+  const payloadB64 = base64UrlEncode(enc.encode(payloadStr));
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const sigBuffer = await crypto.subtle.sign('HMAC', key, enc.encode(payloadB64));
+  const sigB64 = base64UrlEncode(sigBuffer);
+
+  return `${payloadB64}.${sigB64}`;
+}
+
+async function verifyStreamTicket(
+  secret: string,
+  ticket: string
+): Promise<StreamTicketPayload | null> {
+  const parts = ticket.split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+
+  try {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      enc.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+
+    const sigBytes = base64UrlDecode(sigB64);
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      sigBytes.buffer as ArrayBuffer,
+      enc.encode(payloadB64)
+    );
+    if (!valid) return null;
+
+    const payloadBytes = base64UrlDecode(payloadB64);
+    const payloadStr = new TextDecoder().decode(payloadBytes);
+    const payload = JSON.parse(payloadStr) as StreamTicketPayload;
+    if (!payload.fid || !payload.uid || !payload.exp) return null;
+    if (Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 async function getOrResolveState(): Promise<{ sEncoder: string; uidCookie: string }> {
@@ -102,7 +190,108 @@ export const converterRoutes = new Hono<{
   };
 }>();
 
-converterRoutes.use('/*', requireSession);
+// Exempt /stream endpoints from session cookie check since remote encoder uses HMAC signed ticket
+converterRoutes.use('/*', async (c, next) => {
+  const path = c.req.path;
+  if (path.includes('/converter/stream')) {
+    return next();
+  }
+  return requireSession(c, next);
+});
+
+// POST /api/v1/converter/stream-ticket
+// Generates an HMAC-signed streaming URL for remote encoder to fetch directly from Google Drive
+converterRoutes.post('/stream-ticket', async (c) => {
+  const user = c.get('user');
+  if (!user) {
+    return c.text('Unauthorized', 401);
+  }
+
+  let body: { fileId?: string; filename?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.text('Invalid JSON', 400);
+  }
+
+  const { fileId, filename } = body;
+  if (!fileId || typeof fileId !== 'string') {
+    return c.text('Missing or invalid fileId', 400);
+  }
+
+  const safeFilename = (filename || 'video.mp4').trim().replace(/[/\\?%*:|"<>]/g, '_');
+  const exp = Date.now() + 60 * 60 * 1000; // 1 hour ticket
+
+  const ticket = await signStreamTicket(c.env.SESSION_SECRET, {
+    fid: fileId,
+    uid: user.id,
+    fn: safeFilename,
+    exp,
+  });
+
+  const appOrigin = c.env.APP_ORIGIN || new URL(c.req.url).origin;
+  const streamUrl = `${appOrigin}/api/v1/converter/stream/${encodeURIComponent(safeFilename)}?ticket=${ticket}`;
+
+  return c.json({
+    ticket,
+    streamUrl,
+    expiresAt: exp,
+  });
+});
+
+// Handler for GET and HEAD on /stream and /stream/:filename
+const handleStreamRequest = async (c: any) => {
+  const ticket = c.req.query('ticket');
+  if (!ticket) {
+    return c.text('Missing stream ticket', 403);
+  }
+
+  const payload = await verifyStreamTicket(c.env.SESSION_SECRET, ticket);
+  if (!payload) {
+    return c.text('Invalid or expired stream ticket', 403);
+  }
+
+  const clientRange = c.req.header('range');
+  const isHead = c.req.method.toUpperCase() === 'HEAD';
+
+  try {
+    if (isHead) {
+      const meta = await getFileMetadata(c.env, payload.uid, payload.fid);
+      const headers = new Headers();
+      headers.set('Content-Type', meta.mimeType || 'application/octet-stream');
+      headers.set('Accept-Ranges', 'bytes');
+      if (meta.size) {
+        headers.set('Content-Length', String(meta.size));
+      }
+      headers.set('Content-Disposition', `inline; filename="${encodeURIComponent(payload.fn)}"`);
+      return new Response(null, { status: 200, headers });
+    }
+
+    const upstreamRes = await downloadFile(c.env, payload.uid, payload.fid, clientRange);
+    const headers = new Headers();
+    const contentType = upstreamRes.headers.get('Content-Type') || 'application/octet-stream';
+    headers.set('Content-Type', contentType);
+    headers.set('Accept-Ranges', 'bytes');
+
+    const contentLength = upstreamRes.headers.get('Content-Length');
+    if (contentLength) headers.set('Content-Length', contentLength);
+
+    const contentRange = upstreamRes.headers.get('Content-Range');
+    if (contentRange) headers.set('Content-Range', contentRange);
+
+    headers.set('Content-Disposition', `inline; filename="${encodeURIComponent(payload.fn)}"`);
+
+    return new Response(upstreamRes.body, {
+      status: upstreamRes.status,
+      headers,
+    });
+  } catch (err) {
+    return c.text(`Stream failed: ${(err as Error).message || 'Google Drive error'}`, 502);
+  }
+};
+
+converterRoutes.on(['GET', 'HEAD'], '/stream', handleStreamRequest);
+converterRoutes.on(['GET', 'HEAD'], '/stream/:filename', handleStreamRequest);
 
 // GET /api/v1/converter/config
 converterRoutes.get('/config', async (c) => {

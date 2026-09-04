@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   MediaType,
   VIDEO_FORMATS,
@@ -8,13 +8,18 @@ import {
   ConversionOptions,
   ConversionState,
   SelectedDriveFile,
+  THREEGP_RESOLUTIONS,
+  VIDEO_RESOLUTIONS,
 } from './types';
 import { ResolutionDropdown } from './ResolutionDropdown';
 import { DriveVideoPickerModal } from './DriveVideoPickerModal';
 import {
   fetchConverterConfig,
+  createStreamTicket,
+  importRemoteVideoToEncoder,
   uploadDriveVideoToEncoder,
   startEncodingJob,
+  UploadResult,
 } from './converterClient';
 import { FolderPicker } from '../components/FolderPicker';
 import { createRemoteUploadJob } from '../api/jobs';
@@ -41,8 +46,41 @@ export function ConverterPanel() {
     noAudio: false,
   });
 
-  // More formats dropdown open state
+  // More formats dropdown open state & dropdown container ref
   const [isMoreFormatsOpen, setIsMoreFormatsOpen] = useState(false);
+  const moreDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Responsive check for mobile screen width (< 640px)
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 640;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Close more dropdown when clicking outside
+  useEffect(() => {
+    if (!isMoreFormatsOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (moreDropdownRef.current && !moreDropdownRef.current.contains(e.target as Node)) {
+        setIsMoreFormatsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMoreFormatsOpen]);
+
   // Settings drawer toggle
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -84,7 +122,7 @@ export function ConverterPanel() {
     setOptions((prev) => ({
       ...prev,
       format: fmt,
-      preset: config.defaultPreset || 'same',
+      preset: config.defaultPreset || (fmt === '3gp' ? '176x144' : 'same'),
       vcodec: config.defaults.vcodec || config.vcodecs?.[0] || 'h264',
       acodec: config.defaults.acodec || config.acodecs?.[0] || 'aac',
     }));
@@ -141,27 +179,74 @@ export function ConverterPanel() {
       const config = await fetchConverterConfig();
       const uid = config.uid;
 
-      // 2. Upload Google Drive video to encoder
-      setConversion((prev) => ({ ...prev, statusText: 'Streaming video from Google Drive to converter...' }));
-      const uploadRes = await uploadDriveVideoToEncoder(
-        selectedFile.id,
-        selectedFile.name,
-        selectedFile.sizeBytes,
-        config.sEncoder,
-        {
-          signal: controller.signal,
-          uid,
-          onProgress: (info) => {
-            setConversion((prev) => ({
-              ...prev,
-              uploadProgress: info.progressPercent,
-              uploadSpeedMb: info.speedMb,
-              uploadEtaSec: info.etaSec,
-              statusText: `Uploading: ${info.progressPercent}% (${info.speedMb} MB/s, ~${info.etaSec}s remaining)`,
-            }));
-          },
-        }
-      );
+      let uploadRes: UploadResult;
+
+      // 2. Transfer Google Drive video to encoder
+      // Attempt 100% remote streaming first (server-to-server, 0 MB browser bandwidth)
+      try {
+        setConversion((prev) => ({
+          ...prev,
+          statusText: 'Connecting remote server to Google Drive...',
+        }));
+
+        const ticketRes = await createStreamTicket(selectedFile.id, selectedFile.name);
+        if (controller.signal.aborted) throw new Error('Conversion cancelled');
+
+        setConversion((prev) => ({
+          ...prev,
+          statusText: 'Streaming directly between Google Drive and converter (0 MB client data)...',
+        }));
+
+        const remoteTask = importRemoteVideoToEncoder(
+          config.sEncoder,
+          ticketRes.streamUrl,
+          selectedFile.name,
+          {
+            uid,
+            signal: controller.signal,
+            onProgress: (percent) => {
+              setConversion((prev) => ({
+                ...prev,
+                uploadProgress: percent,
+                statusText: `Remote Transfer: ${percent}% (Direct Server-to-Server, 0 MB client data)`,
+              }));
+            },
+          }
+        );
+
+        activeSocketCancelRef.current = remoteTask.cancel;
+        uploadRes = await remoteTask.promise;
+      } catch (remoteErr) {
+        if (controller.signal.aborted) throw remoteErr;
+
+        // Fallback to chunked upload if remote direct fetch fails
+        console.warn('Remote direct transfer failed, falling back to chunked upload:', remoteErr);
+        setConversion((prev) => ({
+          ...prev,
+          uploadProgress: 0,
+          statusText: 'Falling back to chunked upload from Google Drive...',
+        }));
+
+        uploadRes = await uploadDriveVideoToEncoder(
+          selectedFile.id,
+          selectedFile.name,
+          selectedFile.sizeBytes,
+          config.sEncoder,
+          {
+            signal: controller.signal,
+            uid,
+            onProgress: (info) => {
+              setConversion((prev) => ({
+                ...prev,
+                uploadProgress: info.progressPercent,
+                uploadSpeedMb: info.speedMb,
+                uploadEtaSec: info.etaSec,
+                statusText: `Uploading: ${info.progressPercent}% (${info.speedMb} MB/s, ~${info.etaSec}s remaining)`,
+              }));
+            },
+          }
+        );
+      }
 
       // 3. Start Encoding via WebSocket
       setConversion((prev) => ({
@@ -257,18 +342,34 @@ export function ConverterPanel() {
     }
   };
 
-  // Video format buttons
-  const primaryVideoFormats = ['mp4', 'avi', 'mov', 'mkv'];
-  const moreVideoFormats = ['flv', '3gp', 'webm', 'mpeg'];
+  // Video format buttons: responsive split for mobile (< 640px) vs desktop
+  const desktopPrimaryVideoFormats = ['mp4', 'avi', 'mpeg', 'mov', 'flv', '3gp', 'webm', 'mkv', 'wmv'];
+  const desktopMoreVideoFormats = ['Apple', 'Android'];
 
-  // Audio format buttons
-  const primaryAudioFormats = ['mp3', 'wav', 'm4a', 'flac'];
-  const moreAudioFormats = ['ogg'];
+  const mobilePrimaryVideoFormats = ['mp4', 'avi', 'mov'];
+  const mobileMoreVideoFormats = ['mpeg', 'flv', '3gp', 'webm', 'mkv', 'wmv', 'Apple', 'Android'];
+
+  // Audio format buttons: responsive split for mobile (< 640px) vs desktop
+  const desktopPrimaryAudioFormats = ['mp3', 'wav', 'm4a', 'flac'];
+  const desktopMoreAudioFormats = ['ogg'];
+
+  const mobilePrimaryAudioFormats = ['mp3', 'wav', 'm4a'];
+  const mobileMoreAudioFormats = ['flac', 'ogg'];
+
+  const currentPrimaryFormats =
+    options.mediaType === 'video'
+      ? (isMobile ? mobilePrimaryVideoFormats : desktopPrimaryVideoFormats)
+      : (isMobile ? mobilePrimaryAudioFormats : desktopPrimaryAudioFormats);
+
+  const currentMoreFormats =
+    options.mediaType === 'video'
+      ? (isMobile ? mobileMoreVideoFormats : desktopMoreVideoFormats)
+      : (isMobile ? mobileMoreAudioFormats : desktopMoreAudioFormats);
 
   return (
     <div className="w-full max-w-3xl mx-auto font-sans">
       {/* Skeuomorphic Metallic Main Card - matching Image 1 & 2 */}
-      <div className="relative rounded-3xl p-6 sm:p-8 bg-gradient-to-b from-[#d8dce2] via-[#cfd4dc] to-[#c2c8d2] dark:from-[#2a303c] dark:via-[#212631] dark:to-[#181d26] border border-[#bcc3cf] dark:border-[#384152] shadow-[0_12px_40px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.7)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]">
+      <div className="relative rounded-3xl p-4 sm:p-6 md:p-8 bg-gradient-to-b from-[#d8dce2] via-[#cfd4dc] to-[#c2c8d2] dark:from-[#2a303c] dark:via-[#212631] dark:to-[#181d26] border border-[#bcc3cf] dark:border-[#384152] shadow-[0_12px_40px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.7)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]">
         {/* Subtle decorative mesh/dots overlay */}
         <div
           className="absolute inset-0 rounded-3xl pointer-events-none opacity-40 dark:opacity-20 bg-[radial-gradient(#a3adba_1px,transparent_1px)] dark:bg-[radial-gradient(#475569_1px,transparent_1px)] [background-size:12px_12px]"
@@ -318,9 +419,14 @@ export function ConverterPanel() {
                       <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
                         {selectedFile.name}
                       </p>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {formatBytes(selectedFile.sizeBytes)} • Google Drive
-                      </p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {formatBytes(selectedFile.sizeBytes)} • Google Drive
+                        </p>
+                        <span className="inline-flex items-center text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-md border border-emerald-500/20">
+                          Direct Remote Stream (0 MB Bandwidth)
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <button
@@ -347,7 +453,7 @@ export function ConverterPanel() {
           {/* ======================================================== */}
           {/* STEP 2: Format & Resolution Selector                      */}
           {/* ======================================================== */}
-          <div className="flex items-start gap-4">
+          <div className="flex items-start gap-3 sm:gap-4">
             {/* Number 2 Badge */}
             <div className="w-10 h-10 rounded-full bg-gradient-to-b from-white/90 via-slate-200 to-slate-300 dark:from-slate-700 dark:via-slate-800 dark:to-slate-900 border border-slate-300 dark:border-slate-600 shadow-[inset_0_1px_2px_rgba(255,255,255,0.8),0_2px_4px_rgba(0,0,0,0.1)] flex items-center justify-center font-bold text-base text-slate-600 dark:text-slate-300 shrink-0">
               2
@@ -361,7 +467,7 @@ export function ConverterPanel() {
                   <button
                     type="button"
                     onClick={() => handleMediaTypeChange('video')}
-                    className={`px-6 py-2 rounded-t-xl text-xs font-bold transition-all ${
+                    className={`px-4 sm:px-6 py-2 rounded-t-xl text-xs font-bold transition-all ${
                       options.mediaType === 'video'
                         ? 'bg-[#5582a8] text-white shadow-sm'
                         : 'bg-[#b6bdc8] dark:bg-[#343b47] text-slate-700 dark:text-slate-300 hover:bg-[#a8b0bd]'
@@ -372,7 +478,7 @@ export function ConverterPanel() {
                   <button
                     type="button"
                     onClick={() => handleMediaTypeChange('audio')}
-                    className={`px-6 py-2 rounded-t-xl text-xs font-bold transition-all ${
+                    className={`px-4 sm:px-6 py-2 rounded-t-xl text-xs font-bold transition-all ${
                       options.mediaType === 'audio'
                         ? 'bg-[#5582a8] text-white shadow-sm'
                         : 'bg-[#b6bdc8] dark:bg-[#343b47] text-slate-700 dark:text-slate-300 hover:bg-[#a8b0bd]'
@@ -383,73 +489,68 @@ export function ConverterPanel() {
                 </div>
 
                 {/* Tab Content Box with Segmented Format Buttons */}
-                <div className="bg-[#5582a8] p-2.5 rounded-b-2xl rounded-tr-2xl shadow-md">
-                  <div className="flex items-center rounded-xl bg-white/95 dark:bg-slate-900 border border-slate-300/80 dark:border-slate-700 overflow-hidden shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]">
+                <div className="bg-[#5582a8] p-2 sm:p-2.5 rounded-b-2xl rounded-tr-2xl shadow-md max-w-full">
+                  <div className="flex items-center rounded-xl bg-white/95 dark:bg-slate-900 border border-slate-300/80 dark:border-slate-700 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]">
                     {/* Primary Format Buttons */}
-                    {(options.mediaType === 'video' ? primaryVideoFormats : primaryAudioFormats).map(
-                      (fmt) => {
-                        const isSelected = options.format === fmt;
-                        return (
-                          <button
-                            key={fmt}
-                            type="button"
-                            onClick={() => handleFormatChange(fmt)}
-                            className={`flex-1 min-w-[58px] py-1.5 px-3 text-xs font-bold transition-all border-r last:border-r-0 border-slate-200 dark:border-slate-800 ${
-                              isSelected
-                                ? 'bg-gradient-to-b from-[#5c6877] to-[#45505e] text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.3)]'
-                                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                            }`}
-                          >
-                            {fmt}
-                          </button>
-                        );
-                      }
-                    )}
+                    {currentPrimaryFormats.map((fmt, index) => {
+                      const isSelected = options.format === fmt;
+                      const isFirst = index === 0;
+                      return (
+                        <button
+                          key={fmt}
+                          type="button"
+                          onClick={() => handleFormatChange(fmt)}
+                          className={`flex-1 min-w-[46px] sm:min-w-[58px] py-1.5 px-2 sm:px-3 text-[11px] sm:text-xs font-bold transition-all border-r border-slate-200 dark:border-slate-800 ${
+                            isFirst ? 'rounded-l-xl' : ''
+                          } ${
+                            isSelected
+                              ? 'bg-gradient-to-b from-[#5c6877] to-[#45505e] text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.3)]'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {fmt}
+                        </button>
+                      );
+                    })}
 
                     {/* More Formats Dropdown Button */}
-                    <div className="relative">
+                    <div className="relative shrink-0" ref={moreDropdownRef}>
                       <button
                         type="button"
                         onClick={() => setIsMoreFormatsOpen(!isMoreFormatsOpen)}
-                        className={`flex items-center gap-1.5 py-1.5 px-3 text-xs font-bold transition-all ${
-                          (options.mediaType === 'video' ? moreVideoFormats : moreAudioFormats).includes(
-                            options.format
-                          )
-                            ? 'bg-gradient-to-b from-[#5c6877] to-[#45505e] text-white'
+                        className={`flex items-center gap-1.5 py-1.5 px-2.5 sm:px-3 text-[11px] sm:text-xs font-bold transition-all rounded-r-xl ${
+                          currentMoreFormats.includes(options.format)
+                            ? 'bg-gradient-to-b from-[#5c6877] to-[#45505e] text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.3)]'
                             : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
                         <span>
-                          {(options.mediaType === 'video' ? moreVideoFormats : moreAudioFormats).includes(
-                            options.format
-                          )
+                          {currentMoreFormats.includes(options.format)
                             ? options.format
                             : 'more'}
                         </span>
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
                         </svg>
                       </button>
 
                       {/* Popup of More Formats */}
                       {isMoreFormatsOpen && (
-                        <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-slate-850 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1 z-30 animate-fade-in">
-                          {(options.mediaType === 'video' ? moreVideoFormats : moreAudioFormats).map(
-                            (fmt) => (
-                              <button
-                                key={fmt}
-                                type="button"
-                                onClick={() => handleFormatChange(fmt)}
-                                className={`w-full text-left px-3 py-1.5 text-xs font-bold transition-colors ${
-                                  options.format === fmt
-                                    ? 'bg-indigo-600 text-white'
-                                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                                }`}
-                              >
-                                {fmt}
-                              </button>
-                            )
-                          )}
+                        <div className="absolute right-0 top-full mt-1.5 w-36 max-h-60 overflow-y-auto bg-white dark:bg-slate-850 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1 z-50 animate-fade-in divide-y divide-slate-100 dark:divide-slate-700/50">
+                          {currentMoreFormats.map((fmt) => (
+                            <button
+                              key={fmt}
+                              type="button"
+                              onClick={() => handleFormatChange(fmt)}
+                              className={`w-full text-left px-3 py-1.5 text-xs font-bold transition-colors ${
+                                options.format === fmt
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-750'
+                              }`}
+                            >
+                              {fmt}
+                            </button>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -468,6 +569,11 @@ export function ConverterPanel() {
                     <ResolutionDropdown
                       selectedPresetId={options.preset}
                       onSelectPreset={(p) => setOptions((prev) => ({ ...prev, preset: p }))}
+                      presets={
+                        options.format === '3gp'
+                          ? THREEGP_RESOLUTIONS
+                          : Object.values(VIDEO_FORMATS[options.format]?.presets || VIDEO_RESOLUTIONS)
+                      }
                     />
                   </div>
                 ) : (
@@ -625,7 +731,7 @@ export function ConverterPanel() {
 
                 <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
                   <span>
-                    Phase: {conversion.phase === 'uploading' ? '1. Uploading to Converter' : '2. FFmpeg Encoding'}
+                    Phase: {conversion.phase === 'uploading' ? '1. Server-to-Server Video Stream' : '2. FFmpeg Encoding'}
                   </span>
                   <span>
                     {conversion.phase === 'uploading'

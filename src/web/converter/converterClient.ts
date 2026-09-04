@@ -1,5 +1,10 @@
 import { apiRequest } from '../api/client';
-import { ConversionOptions, ConversionResult } from './types';
+import {
+  ConversionOptions,
+  ConversionResult,
+  VIDEO_FORMATS,
+  AUDIO_FORMATS,
+} from './types';
 
 export interface ConverterConfig {
   sEncoder: string;
@@ -22,6 +27,232 @@ export interface UploadResult {
   tmpFilename: string;
   durationInSeconds: number;
   raw: any;
+}
+
+export interface StreamTicketResponse {
+  ticket: string;
+  streamUrl: string;
+  expiresAt: number;
+}
+
+/**
+ * Creates a time-limited HMAC-signed streaming URL from the worker
+ * allowing the remote 123Apps encoder to fetch the Google Drive video directly.
+ */
+export async function createStreamTicket(
+  fileId: string,
+  filename: string
+): Promise<StreamTicketResponse> {
+  return apiRequest<StreamTicketResponse>('/api/v1/converter/stream-ticket', {
+    method: 'POST',
+    body: JSON.stringify({ fileId, filename }),
+  });
+}
+
+export interface RemoteImportTask {
+  promise: Promise<UploadResult>;
+  cancel: () => void;
+}
+
+/**
+ * Commands the 123Apps remote encoder to fetch the video directly from the signed stream URL.
+ * Video data streams server-to-server with ZERO browser upload/download bandwidth.
+ */
+export function importRemoteVideoToEncoder(
+  sEncoder: string,
+  streamUrl: string,
+  filename: string,
+  options?: {
+    uid?: string;
+    signal?: AbortSignal;
+    onProgress?: (progressPercent: number) => void;
+  }
+): RemoteImportTask {
+  const isLocalDev =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.endsWith('.local'));
+
+  const wsProtocol =
+    typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const uidParam = options?.uid ? `&uid=${encodeURIComponent(options.uid)}` : '';
+  const proxyWsUrl =
+    typeof window !== 'undefined' && window.location.host
+      ? `${wsProtocol}//${window.location.host}/api/v1/converter/ws?encoder=${encodeURIComponent(sEncoder)}${uidParam}`
+      : `wss://${sEncoder}/socket.io/?EIO=4&transport=websocket`;
+  const directWsUrl = `wss://${sEncoder}/socket.io/?EIO=4&transport=websocket`;
+  const initialWsUrl = isLocalDev ? directWsUrl : proxyWsUrl;
+
+  let ws: WebSocket | null = null;
+  let isCancelled = false;
+  let triedFallback = isLocalDev;
+  const operationId = `${Date.now()}_${sEncoder.replace(/[^a-zA-Z0-9]/g, '')}_${Math.random().toString(36).substring(2, 8)}`;
+  let pid: number | null = null;
+
+  let cancelFn: () => void = () => {};
+
+  const promise = new Promise<UploadResult>((resolve, reject) => {
+    const cleanUp = () => {
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+        ws = null;
+      }
+    };
+
+    cancelFn = () => {
+      isCancelled = true;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(
+            `42["cancel_operation",{"site_id":"vconv","codebase_id":"vconv","operation_id":"${operationId}","pid":${pid || 'null'}}]`
+          );
+        } catch {
+          // ignore
+        }
+      }
+      cleanUp();
+      reject(new Error('Remote import cancelled'));
+    };
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        cancelFn();
+        return;
+      }
+      options.signal.addEventListener('abort', () => {
+        cancelFn();
+      });
+    }
+
+    function bindSocket(socket: WebSocket) {
+      ws = socket;
+
+      socket.onopen = () => {
+        // Connected
+      };
+
+      socket.onerror = () => {
+        if (!isCancelled && !triedFallback && socket.readyState !== WebSocket.OPEN) {
+          triedFallback = true;
+          try {
+            socket.close();
+          } catch {
+            // ignore
+          }
+          try {
+            const directSocket = new WebSocket(directWsUrl);
+            bindSocket(directSocket);
+            return;
+          } catch {
+            // ignore
+          }
+        }
+        if (!isCancelled) {
+          reject(new Error('Remote encoder WebSocket connection failed'));
+          cleanUp();
+        }
+      };
+
+      socket.onclose = () => {
+        // Closed
+      };
+
+      socket.onmessage = (event) => {
+        if (isCancelled) return;
+        const msg = String(event.data);
+
+        // Engine.IO ping/pong
+        if (msg === '2') {
+          socket.send('3'); // pong
+          return;
+        }
+
+        // Engine.IO handshake received ("0{...}")
+        if (msg.startsWith('0')) {
+          socket.send('40');
+          return;
+        }
+
+        // Socket.IO connected ("40{...}")
+        if (msg.startsWith('40')) {
+          const payload = {
+            site_id: 'vconv',
+            codebase_id: 'vconv',
+            uid: options?.uid,
+            operation_id: operationId,
+            action_type: 'open_remote',
+            remote_url: streamUrl,
+            original_filename: filename,
+            secondary: false,
+            id3: 1,
+            ff: 1,
+          };
+          socket.send(`42["open_remote",${JSON.stringify(payload)}]`);
+          return;
+        }
+
+        // Socket.IO custom event ("42["open_remote", ...]")
+        if (msg.startsWith('42')) {
+          try {
+            const json = JSON.parse(msg.substring(2));
+            const eventName = json[0];
+            const data = json[1];
+
+            if (eventName === 'open_remote' && data) {
+              if (data.pid) pid = data.pid;
+
+              const type = data.message_type;
+              if (type === 'progress') {
+                const val = parseInt(data.progress_value, 10);
+                if (!isNaN(val)) {
+                  options?.onProgress?.(val);
+                }
+              } else if (type === 'final_result') {
+                const durationInSeconds = data.ff?.duration_in_seconds || 0;
+                resolve({
+                  tmpFilename: data.tmp_filename,
+                  durationInSeconds,
+                  raw: data,
+                });
+                cleanUp();
+              } else if (type === 'error') {
+                reject(new Error(data.error_desc || 'Remote download failed on encoder'));
+                cleanUp();
+              } else if (type === 'http_auth_request') {
+                reject(new Error('Stream URL requires authentication'));
+                cleanUp();
+              } else if (type && type.includes('exceeded')) {
+                reject(new Error('Video file size exceeds remote encoder quota'));
+                cleanUp();
+              }
+            }
+          } catch {
+            // ignore JSON parse error
+          }
+        }
+      };
+    }
+
+    try {
+      bindSocket(new WebSocket(initialWsUrl));
+    } catch {
+      try {
+        bindSocket(new WebSocket(directWsUrl));
+      } catch (err) {
+        reject(err);
+      }
+    }
+  });
+
+  return {
+    promise,
+    cancel: cancelFn,
+  };
 }
 
 /**
@@ -265,6 +496,12 @@ export function startEncodingJob(
       // Socket.IO connected ("40{...}")
       if (msg.startsWith('40')) {
         // Emit "encode" packet "42["encode", { ... }]"
+        const formatConfig =
+          options.mediaType === 'video'
+            ? VIDEO_FORMATS[options.format]
+            : AUDIO_FORMATS[options.format];
+        const targetFormat = formatConfig?.ffmpegFormat || options.format;
+
         const encodePayload: Record<string, any> = {
           site_id: 'vconv',
           codebase_id: 'vconv',
@@ -273,7 +510,7 @@ export function startEncodingJob(
           tmp_filename: tmpFilename,
           duration_in_seconds: durationInSeconds,
           format_type: options.mediaType,
-          format: options.format,
+          format: targetFormat,
           preset: options.preset,
           no_audio: options.noAudio,
         };
