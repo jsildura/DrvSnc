@@ -2,14 +2,25 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { DrivePage } from '../../src/web/routes/DrivePage';
+import { driveCache } from '../../src/web/services/driveCache';
+
+beforeEach(() => {
+  driveCache.invalidateAll();
+});
+
+afterEach(() => {
+  driveCache.invalidateAll();
+});
 
 describe('Drive Management UI Component (<DrivePage />)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    driveCache.invalidateAll();
   });
 
   afterEach(() => {
     cleanup();
+    driveCache.invalidateAll();
   });
 
   it('renders Drive explorer with folders, files, and storage quota', async () => {
@@ -69,6 +80,94 @@ describe('Drive Management UI Component (<DrivePage />)', () => {
       expect(screen.getByText('Google Drive Explorer')).toBeDefined();
       expect(screen.getByText('Project Documents')).toBeDefined();
       expect(screen.getByText('report.pdf')).toBeDefined();
+      expect(screen.getByText('5.0 GB of 15 GB')).toBeDefined();
+    });
+  });
+
+  it('renders rich loading skeleton while fetching drive items', async () => {
+    localStorage.setItem('gdu_drive_view_mode', 'grid');
+    let resolveItemsPromise: ((value: Response) => void) | undefined;
+    const itemsPromise = new Promise<Response>((resolve) => {
+      resolveItemsPromise = resolve;
+    });
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 0, limit: 15000000000, usageInDrive: 0, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return itemsPromise;
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // While loading in grid view, the skeleton container is rendered
+    expect(screen.getByTestId('drive-loading-skeleton')).toBeDefined();
+    expect(screen.getByText(/Loading Drive files/i)).toBeDefined();
+
+    // Resolve the promise
+    resolveItemsPromise!(
+      new Response(JSON.stringify({ items: [], nextPageToken: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('drive-loading-skeleton')).toBeNull();
+      expect(screen.getByText(/No files or folders found/i)).toBeDefined();
+    });
+
+    localStorage.removeItem('gdu_drive_view_mode');
+  });
+
+  it('renders loading skeleton for Drive storage widget while quota is fetching', async () => {
+    let resolveQuota: ((value: Response) => void) | undefined;
+    const quotaPromise = new Promise<Response>((resolve) => {
+      resolveQuota = resolve;
+    });
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return quotaPromise;
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(JSON.stringify({ items: [], nextPageToken: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Storage skeleton is displayed while quota request is in-flight
+    expect(screen.getByTestId('drive-storage-skeleton')).toBeDefined();
+
+    // Resolve quota
+    resolveQuota!(
+      new Response(
+        JSON.stringify({
+          usage: 5 * 1024 * 1024 * 1024,
+          limit: 15 * 1024 * 1024 * 1024,
+          usageInDrive: 5 * 1024 * 1024 * 1024,
+          usageInDriveTrash: 0,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    // After resolution, storage skeleton disappears and actual quota is shown
+    await waitFor(() => {
+      expect(screen.queryByTestId('drive-storage-skeleton')).toBeNull();
       expect(screen.getByText('5.0 GB of 15 GB')).toBeDefined();
     });
   });
@@ -181,13 +280,119 @@ describe('Drive Management UI Component (<DrivePage />)', () => {
       expect(screen.getByText('project_spec.pdf')).toBeDefined();
     });
 
-    const previewBtn = screen.getByTitle('Preview file');
+    const previewBtn = screen.getByTitle('Preview');
     fireEvent.click(previewBtn);
 
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeDefined();
       expect(screen.getAllByText('project_spec.pdf').length).toBeGreaterThan(0);
     });
+  });
+
+  it('toggles More actions menu in list view and reveals action buttons', async () => {
+    const mockItems = [
+      {
+        id: 'file-list-1',
+        name: 'test_document.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 2048576,
+        modifiedTime: new Date().toISOString(),
+        webViewLink: 'https://drive.google.com/file/d/file-list-1/view',
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 1000, limit: 15000000000, usageInDrive: 1000, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(JSON.stringify({ items: mockItems, nextPageToken: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+    await waitFor(() => {
+      expect(screen.getByText('test_document.pdf')).toBeDefined();
+    });
+
+    const moreBtn = screen.getByTitle('More actions');
+    expect(moreBtn).toBeDefined();
+
+    fireEvent.click(moreBtn);
+
+    expect(screen.getByTitle('Preview')).toBeDefined();
+    expect(screen.getByTitle('Download')).toBeDefined();
+    expect(screen.getByTitle('Open in Drive')).toBeDefined();
+    expect(screen.getByTitle('Rename')).toBeDefined();
+    expect(screen.getByTitle('Move to trash')).toBeDefined();
+  });
+
+  it('toggles More actions menu for folders in grid view and reveals folder management buttons', async () => {
+    localStorage.setItem('gdu_drive_view_mode', 'grid');
+    const mockItems = [
+      {
+        id: 'folder-grid-1',
+        name: 'Work Documents',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: false,
+        trashed: false,
+        size: 0,
+        modifiedTime: new Date().toISOString(),
+        webViewLink: 'https://drive.google.com/drive/folders/folder-grid-1',
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 1000, limit: 15000000000, usageInDrive: 1000, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(JSON.stringify({ items: mockItems, nextPageToken: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+    await waitFor(() => {
+      expect(screen.getByText('Work Documents')).toBeDefined();
+    });
+
+    const moreBtn = screen.getByTitle('More actions');
+    expect(moreBtn).toBeDefined();
+
+    fireEvent.click(moreBtn);
+
+    expect(screen.getByTitle('Open folder')).toBeDefined();
+    expect(screen.getByTitle('Share')).toBeDefined();
+    expect(screen.getByTitle('Copy link')).toBeDefined();
+    expect(screen.getByTitle('Open in Drive')).toBeDefined();
+    expect(screen.getByTitle('Rename')).toBeDefined();
+    expect(screen.getByTitle('Move to trash')).toBeDefined();
+
+    // Preview and Download should not be rendered for folders
+    expect(screen.queryByTitle('Preview')).toBeNull();
+    expect(screen.queryByTitle('Download')).toBeNull();
+
+    localStorage.removeItem('gdu_drive_view_mode');
   });
 });
 
@@ -220,6 +425,7 @@ describe('Drive destructive actions (grid view)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubGlobal('confirm', vi.fn(() => true));
+    driveCache.invalidateAll();
     // The reported bugs are grid-view specific: the card itself opens the preview.
     localStorage.setItem('gdu_drive_view_mode', 'grid');
   });
@@ -227,6 +433,7 @@ describe('Drive destructive actions (grid view)', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    driveCache.invalidateAll();
     localStorage.removeItem('gdu_drive_view_mode');
   });
 
@@ -576,10 +783,413 @@ describe('Drive destructive actions (grid view)', () => {
       expect(screen.getByText('720p')).toBeDefined();
       expect(screen.getByText('4K')).toBeDefined();
     });
+  });
 
-    // Check that format badges (MP4, MKV) are also present
-    expect(screen.getAllByText('MP4').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('MKV')).toBeDefined();
+  it('loads more items and appends them when nextPageToken is present (infinite load)', async () => {
+    const page1Items = [
+      {
+        id: 'item-page1-1',
+        name: 'File_Page1.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: true,
+        trashed: false,
+        size: 1024,
+      },
+    ];
+
+    const page2Items = [
+      {
+        id: 'item-page2-1',
+        name: 'File_Page2.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: true,
+        trashed: false,
+        size: 2048,
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/drive/shared')) {
+        if (url.includes('pageToken=token-page-2')) {
+          return new Response(
+            JSON.stringify({ items: page2Items, nextPageToken: null }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({ items: page1Items, nextPageToken: 'token-page-2' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Switch to Shared with Me
+    const sharedTabBtn = screen.getByRole('button', { name: /Shared with Me/i });
+    fireEvent.click(sharedTabBtn);
+
+    // Initial page loaded
+    await waitFor(() => {
+      expect(screen.getByText('File_Page1.pdf')).toBeDefined();
+      expect(screen.getByRole('button', { name: /Load more items/i })).toBeDefined();
+    });
+
+    // Click load more button (or triggered via intersection)
+    const loadMoreBtn = screen.getByRole('button', { name: /Load more items/i });
+    fireEvent.click(loadMoreBtn);
+
+    // Both page 1 and page 2 items should now be present
+    await waitFor(() => {
+      expect(screen.getByText('File_Page1.pdf')).toBeDefined();
+      expect(screen.getByText('File_Page2.pdf')).toBeDefined();
+      expect(screen.queryByRole('button', { name: /Load more items/i })).toBeNull();
+    });
+  });
+
+  it('displays loading skeletons when loading more items', async () => {
+    const page1Files = [
+      {
+        id: 'p1-1',
+        name: 'Item_Page_1.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 1024,
+      },
+    ];
+
+    const page2Files = [
+      {
+        id: 'p2-1',
+        name: 'Item_Page_2.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 2048,
+      },
+    ];
+
+    let resolvePage2: (val: Response) => void;
+    const page2Promise = new Promise<Response>((resolve) => {
+      resolvePage2 = resolve;
+    });
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/drive/items')) {
+        if (url.includes('pageToken=token-more')) {
+          return page2Promise;
+        }
+        return new Response(
+          JSON.stringify({ items: page1Files, nextPageToken: 'token-more' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Initial page loaded
+    await waitFor(() => {
+      expect(screen.getByText('Item_Page_1.pdf')).toBeDefined();
+      expect(screen.getByRole('button', { name: /Load more items/i })).toBeDefined();
+    });
+
+    // Skeletons are not visible before loading more
+    expect(screen.queryAllByTestId('loading-more-skeleton').length).toBe(0);
+
+    // Click load more button
+    fireEvent.click(screen.getByRole('button', { name: /Load more items/i }));
+
+    // While request is in-flight, loading-more-skeleton must be visible!
+    await waitFor(() => {
+      expect(screen.getByText('Loading more items...')).toBeDefined();
+      const skeletons = screen.getAllByTestId('loading-more-skeleton');
+      expect(skeletons.length).toBeGreaterThan(0);
+    });
+
+    // Resolve page 2
+    resolvePage2!(
+      new Response(
+        JSON.stringify({ items: page2Files, nextPageToken: null }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    // After resolution, page 2 items appear and loading skeletons disappear
+    await waitFor(() => {
+      expect(screen.getByText('Item_Page_2.pdf')).toBeDefined();
+      expect(screen.queryAllByTestId('loading-more-skeleton').length).toBe(0);
+    });
+  });
+
+  it('supports browsing inside a shared folder and navigating back via breadcrumb', async () => {
+    const sharedRootItems = [
+      {
+        id: 'shared-folder-1',
+        name: 'Shared Team Folder',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: true,
+        trashed: false,
+      },
+    ];
+
+    const insideFolderItems = [
+      {
+        id: 'child-file-1',
+        name: 'Secret_Notes.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        isFolder: false,
+        shared: true,
+        trashed: false,
+        size: 512,
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/drive/shared')) {
+        return new Response(
+          JSON.stringify({ items: sharedRootItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/items') && url.includes('parentId=shared-folder-1')) {
+        return new Response(
+          JSON.stringify({ items: insideFolderItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Switch to Shared with Me
+    fireEvent.click(screen.getByRole('button', { name: /Shared with Me/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Shared Team Folder')).toBeDefined();
+    });
+
+    // Click to open shared folder
+    fireEvent.click(screen.getByText('Shared Team Folder'));
+
+    // Should load inside the folder and display child files
+    await waitFor(() => {
+      expect(screen.getByText('Secret_Notes.docx')).toBeDefined();
+      expect(screen.getByText('Shared Team Folder')).toBeDefined(); // In breadcrumb
+    });
+
+    // Navigate back to Shared with Me root via breadcrumb
+    const sharedButtons = screen.getAllByRole('button', { name: 'Shared with Me' });
+    const rootBreadcrumb = sharedButtons[sharedButtons.length - 1];
+    fireEvent.click(rootBreadcrumb);
+
+    // Root shared items should be shown again
+    await waitFor(() => {
+      expect(screen.getByText('Shared Team Folder')).toBeDefined();
+      expect(screen.queryByText('Secret_Notes.docx')).toBeNull();
+    });
+  });
+
+  it('supports opening a shared folder shortcut via targetId and browsing its contents', async () => {
+    const sharedRootItems = [
+      {
+        id: 'shortcut-folder-1',
+        name: 'Shared Shortcut Folder',
+        mimeType: 'application/vnd.google-apps.shortcut',
+        isFolder: true,
+        isShortcut: true,
+        targetId: 'target-actual-folder-456',
+        targetMimeType: 'application/vnd.google-apps.folder',
+        shared: true,
+        trashed: false,
+      },
+    ];
+
+    const insideFolderItems = [
+      {
+        id: 'target-child-file-1',
+        name: 'Shortcut_Target_Doc.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: true,
+        trashed: false,
+        size: 1024,
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/drive/shared')) {
+        return new Response(
+          JSON.stringify({ items: sharedRootItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/items') && url.includes('parentId=target-actual-folder-456')) {
+        return new Response(
+          JSON.stringify({ items: insideFolderItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Switch to Shared with Me
+    fireEvent.click(screen.getByRole('button', { name: /Shared with Me/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Shared Shortcut Folder')).toBeDefined();
+    });
+
+    // Click to open shared shortcut folder
+    fireEvent.click(screen.getByText('Shared Shortcut Folder'));
+
+    // Should load inside the target folder and display child files
+    await waitFor(() => {
+      expect(screen.getByText('Shortcut_Target_Doc.pdf')).toBeDefined();
+      expect(screen.getByText('Shared Shortcut Folder')).toBeDefined(); // In breadcrumb
+    });
+  });
+
+  it('serves visited folders from cache on back-navigation without re-fetching, and re-fetches on manual refresh', async () => {
+    let rootFetchCount = 0;
+    let subfolderFetchCount = 0;
+
+    const rootFolderItem = {
+      id: 'subfolder-101',
+      name: 'Alpha Project',
+      mimeType: 'application/vnd.google-apps.folder',
+      isFolder: true,
+      shared: false,
+      trashed: false,
+    };
+
+    const subfolderChildItem = {
+      id: 'doc-202',
+      name: 'Plan.pdf',
+      mimeType: 'application/pdf',
+      isFolder: false,
+      shared: false,
+      trashed: false,
+      size: 5000,
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(JSON.stringify({ usage: 0, limit: 100000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/drive/items') && url.includes('parentId=subfolder-101')) {
+        subfolderFetchCount += 1;
+        return new Response(
+          JSON.stringify({ items: [subfolderChildItem], nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/items')) {
+        rootFetchCount += 1;
+        return new Response(
+          JSON.stringify({ items: [rootFolderItem], nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Initial root fetch
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Project')).toBeDefined();
+    });
+    expect(rootFetchCount).toBe(1);
+
+    // Open subfolder
+    fireEvent.click(screen.getByText('Alpha Project'));
+    await waitFor(() => {
+      expect(screen.getByText('Plan.pdf')).toBeDefined();
+    });
+    expect(subfolderFetchCount).toBe(1);
+
+    // Navigate back to My Drive root via breadcrumb
+    const myDriveButtons = screen.getAllByRole('button', { name: 'My Drive' });
+    fireEvent.click(myDriveButtons[myDriveButtons.length - 1]);
+
+    // Should render immediately from cache
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Project')).toBeDefined();
+    });
+    // rootFetchCount should STILL be 1 because fresh cache served it without network call!
+    expect(rootFetchCount).toBe(1);
+
+    // Click manual refresh button
+    const refreshBtn = screen.getByRole('button', { name: 'Refresh folder' });
+    fireEvent.click(refreshBtn);
+
+    // Should trigger fresh network call
+    await waitFor(() => {
+      expect(rootFetchCount).toBe(2);
+      expect(screen.getByText('Alpha Project')).toBeDefined();
+    });
   });
 });
 

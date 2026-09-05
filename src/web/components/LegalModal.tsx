@@ -34,7 +34,7 @@ export function LegalModal({ isOpen, onClose, initialDoc = 'terms' }: LegalModal
               onClick={() => setActiveDoc('terms')}
               className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                 activeDoc === 'terms'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
@@ -44,7 +44,7 @@ export function LegalModal({ isOpen, onClose, initialDoc = 'terms' }: LegalModal
               onClick={() => setActiveDoc('privacy')}
               className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                 activeDoc === 'privacy'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >

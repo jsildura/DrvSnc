@@ -26,6 +26,7 @@ import {
   requestCancel,
   retryJob,
   deleteJobHistory,
+  clearTerminalJobHistory,
 } from '../services/jobRepository';
 import {
   MAX_PARTS,
@@ -1101,6 +1102,29 @@ jobRoutes.post('/:id/retry', requireCsrf, async (c) => {
         },
       },
       (e.status as 400 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// DELETE /history - clear all terminal/finished job history for user
+jobRoutes.delete('/history', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+
+  try {
+    const result = await clearTerminalJobHistory(c.env, user.id);
+    return c.json({ success: true, ...result });
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'CLEAR_HISTORY_FAILED',
+          message: e.message || 'Failed to clear job history',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 404 | 500) || 500
     );
   }
 });

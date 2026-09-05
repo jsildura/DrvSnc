@@ -173,7 +173,15 @@ export function FolderPicker({
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <svg className="w-4 h-4 text-amber-500 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+                        {folder.shared ? (
+                          <path
+                            fillRule="evenodd"
+                            clipRule="evenodd"
+                            d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2zM12 8a2 2 0 110 4 2 2 0 010-4zm0 5c2.33 0 4.31 1.46 5.11 3.5H6.89c.8-2.04 2.78-3.5 5.11-3.5z"
+                          />
+                        ) : (
+                          <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+                        )}
                       </svg>
                       <span className="truncate">{folder.name}</span>
                     </div>
@@ -191,6 +199,16 @@ export function FolderPicker({
                   </div>
                 );
               })
+            )}
+            {isLoading && folders.length > 0 && (
+              <div className="space-y-1 py-1 animate-pulse" aria-label="Loading more folders">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl">
+                    <div className="w-4 h-4 rounded bg-slate-200 dark:bg-slate-700 shrink-0" />
+                    <div className="h-3 rounded bg-slate-200 dark:bg-slate-700" style={{ width: `${50 + (i * 20)}%` }} />
+                  </div>
+                ))}
+              </div>
             )}
             {nextPageToken && (
               <button

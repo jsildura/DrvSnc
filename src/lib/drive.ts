@@ -97,6 +97,8 @@ export async function getSharedWithMeItems(token: string) {
     // Request comprehensive fields including owner info and shared date
     url.searchParams.set('fields', 'files(id,name,mimeType,modifiedTime,createdTime,size,iconLink,shared,sharedWithMeTime,owners,sharingUser,viewedByMeTime,modifiedByMeTime)');
     url.searchParams.set('pageSize', '1000');
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
     url.searchParams.set('orderBy', 'sharedWithMeTime desc');
     
     const response = await fetch(url.toString(), {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { UploadForm } from '../../src/web/uploads/UploadForm';
+import { SeedrBannerSkeleton } from '../../src/web/uploads/SeedrMagnetForm';
 import type { BrowserRelay } from '../../src/web/uploads/useBrowserRelay';
 
 function mockJsonResponse(data: any, status = 200) {
@@ -194,4 +195,49 @@ describe('Seedr Magnet Upload Form UI', () => {
       expect(screen.getByPlaceholderText('your-email@example.com')).toBeTruthy();
     });
   });
+
+  it('renders loading skeleton including the account banner skeleton while fetching status', async () => {
+    let resolveStatus: (value: any) => void;
+    const statusPromise = new Promise((resolve) => {
+      resolveStatus = resolve;
+    });
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/v1/seedr/status')) {
+        await statusPromise;
+        return mockJsonResponse({ connected: false });
+      }
+      return mockJsonResponse({});
+    });
+
+    render(<UploadForm onJobCreated={() => {}} relay={stubRelay} />);
+
+    // Click Magnet / Torrent tab
+    const magnetTab = screen.getByRole('button', { name: /Magnet \/ Torrent/i });
+    fireEvent.click(magnetTab);
+
+    // Verify skeleton appears immediately
+    expect(screen.getByTestId('seedr-loading-skeleton')).toBeTruthy();
+    expect(screen.getByTestId('seedr-banner-skeleton')).toBeTruthy();
+    expect(screen.getByLabelText(/Loading Seedr integration status/i)).toBeTruthy();
+
+    // Now resolve status fetch
+    resolveStatus!({ connected: false });
+
+    // Wait for the skeleton to disappear and the login form to appear
+    await waitFor(() => {
+      expect(screen.queryByTestId('seedr-loading-skeleton')).toBeNull();
+      expect(screen.getByText(/Remote Torrent & Magnet Downloads/i)).toBeTruthy();
+    });
+  });
+
+  it('renders SeedrBannerSkeleton with correct accessibility label and testid', () => {
+    render(<SeedrBannerSkeleton />);
+    const skeleton = screen.getByTestId('seedr-banner-skeleton');
+    expect(skeleton).toBeTruthy();
+    expect(skeleton.getAttribute('aria-label')).toBe('Loading Seedr account status');
+    expect(skeleton.className).toContain('animate-pulse');
+  });
 });
+
+

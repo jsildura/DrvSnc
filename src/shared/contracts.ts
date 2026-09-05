@@ -295,6 +295,9 @@ export const DriveItemViewSchema = z.object({
   iconLink: z.string().nullable().optional(),
   thumbnailLink: z.string().nullable().optional(),
   webViewLink: z.string().nullable().optional(),
+  targetId: z.string().nullable().optional(),
+  targetMimeType: z.string().nullable().optional(),
+  isShortcut: z.boolean().optional(),
   owners: z.array(DriveItemOwnerSchema).optional(),
   parents: z.array(z.string()).optional(),
   videoMediaMetadata: VideoMediaMetadataSchema.optional(),
@@ -361,7 +364,12 @@ export type UpdateDriveItemRequest = z.infer<typeof UpdateDriveItemSchema>;
 export const AddPermissionSchema = z.object({
   role: z.enum(['writer', 'commenter', 'reader']),
   type: z.enum(['user', 'group', 'domain', 'anyone']),
-  emailAddress: z.string().email().optional(),
+  emailAddress: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v : undefined))
+    .pipe(z.string().email().optional()),
 });
 
 export type AddPermissionRequest = z.infer<typeof AddPermissionSchema>;

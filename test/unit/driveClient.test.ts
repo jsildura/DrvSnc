@@ -66,6 +66,48 @@ describe('Drive Client Utilities & Normalization', () => {
     expect(item.size).toBeNull();
   });
 
+  it('detects folder shortcuts and normalizes them as folders with targetId', () => {
+    const rawFolderShortcut = {
+      id: 'shortcut-111',
+      name: 'Shared Team Drive Folder',
+      mimeType: 'application/vnd.google-apps.shortcut',
+      shared: true,
+      trashed: false,
+      shortcutDetails: {
+        targetId: 'target-folder-888',
+        targetMimeType: 'application/vnd.google-apps.folder',
+      },
+    };
+
+    const item = normalizeDriveItem(rawFolderShortcut);
+    expect(item.id).toBe('shortcut-111');
+    expect(item.isFolder).toBe(true);
+    expect(item.isShortcut).toBe(true);
+    expect(item.targetId).toBe('target-folder-888');
+    expect(item.targetMimeType).toBe('application/vnd.google-apps.folder');
+    expect(item.size).toBeNull();
+  });
+
+  it('detects file shortcuts and does not mark them as folders', () => {
+    const rawFileShortcut = {
+      id: 'shortcut-222',
+      name: 'Shared Document Shortcut',
+      mimeType: 'application/vnd.google-apps.shortcut',
+      shared: true,
+      trashed: false,
+      shortcutDetails: {
+        targetId: 'target-doc-999',
+        targetMimeType: 'application/pdf',
+      },
+    };
+
+    const item = normalizeDriveItem(rawFileShortcut);
+    expect(item.id).toBe('shortcut-222');
+    expect(item.isFolder).toBe(false);
+    expect(item.isShortcut).toBe(true);
+    expect(item.targetId).toBe('target-doc-999');
+  });
+
   it('maps Google HTTP errors to stable internal error codes without leaking raw bodies', () => {
     const error401 = mapDriveError(401, 'Unauthorized');
     expect(error401.code).toBe('DRIVE_UNAUTHORIZED');

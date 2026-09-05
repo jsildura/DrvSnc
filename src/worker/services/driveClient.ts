@@ -93,7 +93,12 @@ export function getExportMimeType(mimeType: string, requestedMimeType?: string):
 }
 
 export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView {
-  const isFolder = raw.mimeType === 'application/vnd.google-apps.folder';
+  const shortcutDetails = raw.shortcutDetails as Record<string, unknown> | undefined;
+  const targetId = typeof shortcutDetails?.targetId === 'string' ? shortcutDetails.targetId : undefined;
+  const targetMimeType = typeof shortcutDetails?.targetMimeType === 'string' ? shortcutDetails.targetMimeType : undefined;
+  const isShortcut = raw.mimeType === 'application/vnd.google-apps.shortcut';
+  const isShortcutFolder = isShortcut && targetMimeType === 'application/vnd.google-apps.folder';
+  const isFolder = raw.mimeType === 'application/vnd.google-apps.folder' || isShortcutFolder;
   const rawSize = raw.size as string | number | undefined;
   const size =
     isFolder || rawSize === undefined || rawSize === null
@@ -124,6 +129,9 @@ export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView 
     iconLink: typeof raw.iconLink === 'string' ? raw.iconLink : null,
     thumbnailLink: typeof raw.thumbnailLink === 'string' ? raw.thumbnailLink : null,
     webViewLink: typeof raw.webViewLink === 'string' ? raw.webViewLink : null,
+    targetId,
+    targetMimeType,
+    isShortcut,
     owners,
     parents: Array.isArray(raw.parents) ? (raw.parents as string[]) : undefined,
     videoMediaMetadata: raw.videoMediaMetadata
@@ -262,7 +270,7 @@ export async function withDriveAuth<T>(
 }
 
 const DRIVE_FILE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata';
+  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata,shortcutDetails(targetId,targetMimeType)';
 
 export async function listItems(
   env: Env,
@@ -297,6 +305,8 @@ export async function listItems(
     url.searchParams.set('q', qParts.join(' and '));
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
     url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
     url.searchParams.set(
       'orderBy',
@@ -440,6 +450,8 @@ export async function searchItems(
     url.searchParams.set('q', qParts.join(' and '));
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
     url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 100)));
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
     const res = await fetch(url.toString(), {
@@ -465,32 +477,137 @@ export async function searchItems(
 export async function listShared(
   env: Env,
   userId: string,
-  options?: { pageSize?: number; pageToken?: string }
+  options?: { pageSize?: number; pageToken?: string; query?: string }
 ): Promise<DrivePage> {
   return withDriveAuth(env, userId, async (token) => {
-    const url = new URL(`${DRIVE_API_BASE}/files`);
-    url.searchParams.set('q', 'sharedWithMe = true and trashed = false');
-    url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
-    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
-    url.searchParams.set('orderBy', 'sharedWithMeTime desc');
-    if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
+    const isFirstPage = !options?.pageToken;
+    const pageSize = clampPageSize(options?.pageSize, 50);
 
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const buildUrl = (q: string, size: number, orderBy: string, pageToken?: string) => {
+      const url = new URL(`${DRIVE_API_BASE}/files`);
+      url.searchParams.set('q', q);
+      url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
+      url.searchParams.set('pageSize', String(size));
+      url.searchParams.set('supportsAllDrives', 'true');
+      url.searchParams.set('includeItemsFromAllDrives', 'true');
+      url.searchParams.set('orderBy', orderBy);
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      return url;
+    };
 
-    if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+    const mainQParts = ['sharedWithMe = true', 'trashed = false'];
+    if (options?.query) {
+      const trimmed = options.query.trim();
+      const tokenQuery = trimmed.replace(/^\.+/, '');
+      const escaped = escapeQueryString(tokenQuery || trimmed);
+      if (escaped) {
+        mainQParts.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+      }
     }
 
-    const data = (await res.json()) as {
-      files?: Record<string, unknown>[];
-      nextPageToken?: string | null;
+    const fetchFiles = async (url: URL) => {
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const mapped = mapDriveError(res.status);
+        throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      }
+      return (await res.json()) as {
+        files?: Record<string, unknown>[];
+        nextPageToken?: string | null;
+      };
     };
+
+    // If fetching subsequent pages during infinite scroll, just fetch the next batch of items
+    if (!isFirstPage) {
+      const mainUrl = buildUrl(mainQParts.join(' and '), pageSize, 'sharedWithMeTime desc', options?.pageToken);
+      const data = await fetchFiles(mainUrl);
+      return {
+        items: (data.files || []).map(normalizeDriveItem),
+        nextPageToken: data.nextPageToken || null,
+      };
+    }
+
+    // On first page, proactively fetch ALL shared folders (not owned by user or sharedWithMe)
+    // so they are not starved or buried behind pages of recent files.
+    const folderQParts = [
+      'trashed = false',
+      "(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/vnd.google-apps.shortcut')",
+      "(sharedWithMe = true or not 'me' in owners)",
+    ];
+    if (options?.query) {
+      const trimmed = options.query.trim();
+      const tokenQuery = trimmed.replace(/^\.+/, '');
+      const escaped = escapeQueryString(tokenQuery || trimmed);
+      if (escaped) {
+        folderQParts.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+      }
+    }
+
+    const folderUrl = buildUrl(folderQParts.join(' and '), 100, 'folder,name');
+    const mainUrl = buildUrl(mainQParts.join(' and '), pageSize, 'sharedWithMeTime desc');
+
+    let folderFiles: Record<string, unknown>[] = [];
+    let mainData: { files?: Record<string, unknown>[]; nextPageToken?: string | null } = { files: [] };
+
+    try {
+      const [foldersResult, mainResult] = await Promise.all([
+        fetch(folderUrl.toString(), { headers: { Authorization: `Bearer ${token}` } }).then(async (r) => {
+          if (!r.ok) {
+            // If the broad query (not 'me' in owners) fails with 400, fallback to standard sharedWithMe
+            const fallbackQ = [
+              'sharedWithMe = true',
+              'trashed = false',
+              "(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/vnd.google-apps.shortcut')",
+            ];
+            if (options?.query) {
+              const trimmed = options.query.trim();
+              const tokenQuery = trimmed.replace(/^\.+/, '');
+              const escaped = escapeQueryString(tokenQuery || trimmed);
+              if (escaped) fallbackQ.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+            }
+            const fallbackUrl = buildUrl(fallbackQ.join(' and '), 100, 'folder,name');
+            const fallbackRes = await fetch(fallbackUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
+            if (!fallbackRes.ok) return { files: [] };
+            return (await fallbackRes.json()) as { files?: Record<string, unknown>[] };
+          }
+          return (await r.json()) as { files?: Record<string, unknown>[] };
+        }),
+        fetchFiles(mainUrl),
+      ]);
+      folderFiles = foldersResult.files || [];
+      mainData = mainResult;
+    } catch {
+      mainData = await fetchFiles(mainUrl);
+    }
+
+    const normalizedFolders = folderFiles
+      .map(normalizeDriveItem)
+      .filter((item) => item.isFolder);
+
+    const normalizedMainItems = (mainData.files || []).map(normalizeDriveItem);
+
+    const seenIds = new Set<string>();
+    const merged: DriveItemView[] = [];
+
+    for (const folder of normalizedFolders) {
+      if (!seenIds.has(folder.id)) {
+        seenIds.add(folder.id);
+        merged.push(folder);
+      }
+    }
+
+    for (const item of normalizedMainItems) {
+      if (!seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        merged.push(item);
+      }
+    }
+
     return {
-      items: (data.files || []).map(normalizeDriveItem),
-      nextPageToken: data.nextPageToken || null,
+      items: merged,
+      nextPageToken: mainData.nextPageToken || null,
     };
   });
 }
@@ -505,6 +622,8 @@ export async function listTrash(
     url.searchParams.set('q', 'trashed = true');
     url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
     url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
     const res = await fetch(url.toString(), {
@@ -686,7 +805,7 @@ export async function getPermissions(
 ): Promise<PermissionView[]> {
   return withDriveAuth(env, userId, async (token) => {
     const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(id,role,type,emailAddress,displayName,photoLink)`,
+      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(id,role,type,emailAddress,displayName,photoLink)&supportsAllDrives=true`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
@@ -723,17 +842,26 @@ export async function addPermission(
   perm: { role: string; type: string; emailAddress?: string }
 ): Promise<PermissionView> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions?fields=id,role,type,emailAddress,displayName,photoLink`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(perm),
-      }
-    );
+    const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions`);
+    url.searchParams.set('fields', 'id,role,type,emailAddress,displayName,photoLink');
+    url.searchParams.set('supportsAllDrives', 'true');
+
+    const payload: Record<string, unknown> = {
+      role: perm.role,
+      type: perm.type,
+    };
+    if (perm.emailAddress && perm.type !== 'anyone') {
+      payload.emailAddress = perm.emailAddress;
+    }
+
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
 
     if (!res.ok) {
       const mapped = mapDriveError(res.status);
@@ -768,7 +896,7 @@ export async function updatePermission(
 ): Promise<PermissionView> {
   return withDriveAuth(env, userId, async (token) => {
     const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?fields=id,role,type,emailAddress,displayName,photoLink`,
+      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?fields=id,role,type,emailAddress,displayName,photoLink&supportsAllDrives=true`,
       {
         method: 'PATCH',
         headers: {
@@ -811,7 +939,7 @@ export async function removePermission(
 ): Promise<void> {
   return withDriveAuth(env, userId, async (token) => {
     const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}`,
+      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?supportsAllDrives=true`,
       {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },

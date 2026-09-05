@@ -165,7 +165,7 @@ export function UploadForm({
           type="button"
           onClick={() => setActiveMode('local')}
           className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${activeMode === 'local'
-            ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm'
+            ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-sm'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
         >
@@ -179,7 +179,7 @@ export function UploadForm({
           type="button"
           onClick={() => setActiveMode('remote')}
           className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${activeMode === 'remote'
-            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+            ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-sm'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
         >
@@ -193,7 +193,7 @@ export function UploadForm({
           type="button"
           onClick={() => setActiveMode('batch')}
           className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${activeMode === 'batch'
-            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+            ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-sm'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
         >
@@ -207,7 +207,7 @@ export function UploadForm({
           type="button"
           onClick={() => setActiveMode('magnet')}
           className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${activeMode === 'magnet'
-            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+            ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-sm'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
         >

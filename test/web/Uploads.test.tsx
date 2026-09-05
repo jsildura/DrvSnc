@@ -450,4 +450,102 @@ describe('Browser-relayed remote transfers', () => {
     expect(screen.queryByText('Retry from my browser')).toBeNull();
     expect(calls.relayBodies).toHaveLength(0);
   });
+
+  it('renders Clear all button when transfer history exists, and clicking it clears all history', async () => {
+    vi.spyOn(window, 'confirm').mockImplementation(() => true);
+    let historyDeleted = false;
+
+    const completedJob = {
+      id: 'job-completed-1',
+      userId: 'usr-1',
+      sourceKind: 'remote',
+      sourceUrlRedacted: null,
+      filename: 'DrvSnc.zip',
+      fileSize: 1593835,
+      mimeType: 'application/zip',
+      destinationFolderId: null,
+      destinationFolderName: null,
+      status: 'completed',
+      progressBytes: 1593835,
+      attemptCount: 1,
+      errorCode: null,
+      errorMessage: null,
+      driveFileId: 'drive-123',
+      driveFileLink: 'https://drive.google.com/file/d/drive-123/view',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/jobs/history') && init?.method === 'DELETE') {
+        historyDeleted = true;
+        return new Response(JSON.stringify({ success: true, deletedCount: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/api/v1/jobs')) {
+        return new Response(
+          JSON.stringify({
+            jobs: historyDeleted ? [] : [completedJob],
+            nextCursor: null,
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<UploaderPage />);
+
+    // Transfer history shows the record and the Clear all button
+    await waitFor(() => {
+      expect(screen.getByText('DrvSnc.zip')).toBeDefined();
+    });
+
+    const clearAllBtn = screen.getByTestId('clear-all-history-btn');
+    expect(clearAllBtn).toBeDefined();
+    expect(clearAllBtn.textContent).toContain('Clear all');
+
+    // Click Clear all
+    fireEvent.click(clearAllBtn);
+
+    // After clearing, verify the history is empty and Clear all button is removed
+    await waitFor(() => {
+      expect(screen.queryByText('DrvSnc.zip')).toBeNull();
+      expect(screen.getByText('No transfer history yet')).toBeDefined();
+      expect(screen.queryByTestId('clear-all-history-btn')).toBeNull();
+    });
+
+    expect(historyDeleted).toBe(true);
+  });
+
+  it('does not render Clear all button when there are no history jobs', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/jobs')) {
+        return new Response(JSON.stringify({ jobs: [], nextCursor: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<UploaderPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No transfer history yet')).toBeDefined();
+    });
+
+    expect(screen.queryByTestId('clear-all-history-btn')).toBeNull();
+  });
 });

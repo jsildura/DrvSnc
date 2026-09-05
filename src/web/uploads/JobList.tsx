@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { UploadJobView } from '../../shared/contracts';
-import { cancelJob, retryJob, deleteJobHistory } from '../api/jobs';
+import { cancelJob, retryJob, deleteJobHistory, clearAllJobHistory } from '../api/jobs';
 import { BrowserRelay } from './useBrowserRelay';
 import { getRelaySource } from './relayUrlCache';
 
@@ -82,6 +82,32 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
 
   const handleDelete = (id: string) =>
     runAction(id, () => deleteJobHistory(id), 'Failed to remove from history');
+
+  const [isClearingAll, setIsClearingAll] = useState(false);
+  const [clearAllError, setClearAllError] = useState<string | null>(null);
+
+  const handleClearAllHistory = async () => {
+    if (historyJobs.length === 0) return;
+    if (typeof window !== 'undefined' && window.confirm && !window.confirm('Clear all transfer history?')) return;
+
+    setIsClearingAll(true);
+    setClearAllError(null);
+    try {
+      await clearAllJobHistory();
+      onRefresh();
+    } catch (err) {
+      try {
+        await Promise.all(historyJobs.map((j) => deleteJobHistory(j.id)));
+        onRefresh();
+      } catch (fallbackErr) {
+        setClearAllError(
+          (fallbackErr as Error).message || (err as Error).message || 'Failed to clear history'
+        );
+      }
+    } finally {
+      setIsClearingAll(false);
+    }
+  };
 
   const relayFromBrowser = useCallback(
     (job: UploadJobView, url: string) =>
@@ -242,9 +268,37 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
 
       {/* History Jobs Section */}
       <div className="space-y-2.5 sm:space-y-3">
-        <h3 className="text-[13px] sm:text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-          Transfer History ({historyJobs.length})
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-[13px] sm:text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+            Transfer History ({historyJobs.length})
+          </h3>
+          {historyJobs.length > 0 && (
+            <button
+              type="button"
+              onClick={handleClearAllHistory}
+              disabled={isClearingAll || pendingIds.size > 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1 rounded-xl border border-rose-200/80 dark:border-rose-900/60 bg-rose-50/80 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50 hover:border-rose-300 dark:hover:border-rose-700 text-[11px] sm:text-xs font-semibold shadow-2xs hover:shadow-xs transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
+              title="Clear all transfer history"
+              aria-label="Clear all transfer history"
+              data-testid="clear-all-history-btn"
+            >
+              {isClearingAll ? (
+                <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-spin shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0 text-rose-500 dark:text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              )}
+              <span>{isClearingAll ? 'Clearing...' : 'Clear all'}</span>
+            </button>
+          )}
+        </div>
+        {clearAllError && (
+          <p className="text-[11px] sm:text-xs text-rose-500 font-medium">{clearAllError}</p>
+        )}
         {historyJobs.length === 0 ? (
           <div className="p-6 sm:p-8 rounded-2xl border border-slate-200/60 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/50 text-center">
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">No transfer history yet</p>

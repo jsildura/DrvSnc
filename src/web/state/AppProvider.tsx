@@ -4,6 +4,13 @@ import { apiRequest, setCsrfToken } from '../api/client';
 import { rememberAccount, forgetRememberedAccount } from '../auth/rememberedAccounts';
 import { AppTab, LOGIN_PATH, pathForTab, tabForPath } from './tabRoute';
 import { SelectedDriveFile } from '../converter/types';
+import {
+  applyAccentColor,
+  getStoredAccentColor,
+  storeAccentColor,
+  resolveAccentHex,
+  DEFAULT_ACCENT_COLOR,
+} from '../theme/accentColors';
 
 export type { AppTab } from './tabRoute';
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -19,6 +26,8 @@ interface AppContextType {
   navigateToConverter: (file?: SelectedDriveFile | null) => void;
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
+  accentColor: string;
+  setAccentColor: (color: string) => void;
   refreshSession: () => Promise<void>;
   updatePreferences: (patch: Partial<PreferencesView>) => Promise<void>;
   logout: () => Promise<void>;
@@ -43,6 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     return 'system';
   });
+  const [accentColor, setAccentColorState] = useState<string>(() => getStoredAccentColor());
   const [error, setError] = useState<string | null>(null);
   const [pendingConverterFile, setPendingConverterFile] = useState<SelectedDriveFile | null>(null);
 
@@ -94,17 +104,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle('dark', Boolean(isDark));
   }, []);
 
+  const getStoredTheme = useCallback((): ThemeMode => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('gdu_theme') as ThemeMode | null;
+      if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+    }
+    return 'system';
+  }, []);
+
   const setTheme = useCallback((newTheme: ThemeMode) => {
     setThemeState(newTheme);
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('gdu_theme', newTheme);
+      localStorage.setItem('gdu_theme_customized', 'true');
     }
     applyTheme(newTheme);
   }, [applyTheme]);
 
+  const setAccentColor = useCallback((color: string) => {
+    const validHex = resolveAccentHex(color);
+    setAccentColorState(validHex);
+    storeAccentColor(validHex);
+    applyAccentColor(validHex);
+  }, []);
+
   useEffect(() => {
     applyTheme(theme);
   }, [theme, applyTheme]);
+
+  useEffect(() => {
+    applyAccentColor(accentColor);
+  }, [accentColor]);
 
   const refreshSession = useCallback(async () => {
     try {
@@ -121,8 +151,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           prefData = await apiRequest<PreferencesView>('/api/v1/preferences');
           setPreferences(prefData);
-          if (prefData.themeMode) {
+
+          const localStoredTheme = getStoredTheme();
+          const hasExplicitLocalTheme =
+            typeof localStorage !== 'undefined' &&
+            (localStorage.getItem('gdu_theme_customized') === 'true' ||
+              localStorage.getItem('gdu_theme') === 'dark');
+
+          if (hasExplicitLocalTheme && localStoredTheme) {
+            // User explicitly chose this theme on this device.
+            // Preserve the local selection and ensure server preferences stay in sync.
+            setTheme(localStoredTheme);
+            if (prefData.themeMode !== localStoredTheme) {
+              updatePreferences({ themeMode: localStoredTheme }).catch(() => {});
+            }
+          } else if (prefData.themeMode) {
             setTheme(prefData.themeMode as ThemeMode);
+          } else if (localStoredTheme) {
+            setTheme(localStoredTheme);
+          }
+
+          const serverScheme = prefData.colorScheme?.trim().toLowerCase();
+          const localStored = getStoredAccentColor();
+          if (serverScheme && serverScheme !== 'drive' && serverScheme !== 'default') {
+            setAccentColor(prefData.colorScheme);
+          } else if (localStored && localStored.toLowerCase() !== DEFAULT_ACCENT_COLOR.toLowerCase()) {
+            // Server has uncustomized default ('drive') but user previously picked an accent color locally.
+            // Preserve the local selection and sync it to the server.
+            applyAccentColor(localStored);
+            updatePreferences({ colorScheme: localStored }).catch(() => {});
+          } else {
+            setAccentColor(DEFAULT_ACCENT_COLOR);
           }
         } catch {
           // Defaults
@@ -210,6 +269,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (updated.themeMode) {
         setTheme(updated.themeMode as ThemeMode);
       }
+      const updatedScheme = updated.colorScheme?.trim().toLowerCase();
+      if (updatedScheme && updatedScheme !== 'drive' && updatedScheme !== 'default') {
+        setAccentColor(updated.colorScheme);
+      }
       if (updated.rememberAccount === false && user) {
         forgetRememberedAccount(user.id);
         forgetRememberedAccount(user.email);
@@ -222,7 +285,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [setTheme, user]
+    [setTheme, setAccentColor, user]
   );
 
   const logout = useCallback(async () => {
@@ -295,6 +358,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         navigateToConverter,
         theme,
         setTheme,
+        accentColor,
+        setAccentColor,
         refreshSession,
         updatePreferences,
         logout,

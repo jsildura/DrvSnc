@@ -31,10 +31,12 @@ export async function listDriveItems(options?: {
 export async function listSharedItems(options?: {
   pageToken?: string;
   pageSize?: number;
+  query?: string;
 }): Promise<DrivePage> {
   const params = new URLSearchParams();
   if (options?.pageToken) params.set('pageToken', options.pageToken);
   if (options?.pageSize) params.set('pageSize', String(options.pageSize));
+  if (options?.query) params.set('query', options.query);
 
   const queryStr = params.toString() ? `?${params.toString()}` : '';
   return apiRequest<DrivePage>(`/api/v1/drive/shared${queryStr}`);
@@ -116,19 +118,36 @@ export async function emptyTrash(): Promise<void> {
 }
 
 export async function getPermissions(fileId: string): Promise<PermissionView[]> {
-  return apiRequest<PermissionView[]>(`/api/v1/drive/files/${encodeURIComponent(fileId)}/permissions`);
+  const res = await apiRequest<{ permissions: PermissionView[] }>(
+    `/api/v1/drive/files/${encodeURIComponent(fileId)}/permissions`
+  );
+  return res.permissions;
 }
 
 export async function addPermission(
   fileId: string,
-  role: string,
-  type: string,
+  role: 'writer' | 'commenter' | 'reader',
+  type: 'user' | 'group' | 'domain' | 'anyone',
   emailAddress?: string
 ): Promise<PermissionView> {
   return apiRequest<PermissionView>(`/api/v1/drive/files/${encodeURIComponent(fileId)}/permissions`, {
     method: 'POST',
-    body: JSON.stringify({ role, type, emailAddress }),
+    body: JSON.stringify({ role, type, emailAddress: emailAddress || undefined }),
   });
+}
+
+export async function updatePermission(
+  fileId: string,
+  permissionId: string,
+  role: 'writer' | 'commenter' | 'reader'
+): Promise<PermissionView> {
+  return apiRequest<PermissionView>(
+    `/api/v1/drive/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }
+  );
 }
 
 export async function removePermission(fileId: string, permissionId: string): Promise<void> {

@@ -121,6 +121,12 @@ export async function deleteJobHistory(jobId: string): Promise<void> {
   });
 }
 
+export async function clearAllJobHistory(): Promise<{ success: boolean; deletedCount?: number }> {
+  return apiRequest<{ success: boolean; deletedCount?: number }>('/api/v1/jobs/history', {
+    method: 'DELETE',
+  });
+}
+
 // ==========================================
 // BATCH UPLOAD CLIENT API
 // ==========================================

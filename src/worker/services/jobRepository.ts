@@ -559,6 +559,41 @@ export async function deleteJobHistory(
   ]);
 }
 
+export async function clearTerminalJobHistory(
+  env: Env,
+  userId: string
+): Promise<{ deletedCount: number }> {
+  // 1. Delete all terminal jobs (completed, failed, canceled) for this user
+  const deleteResult = await env.DB.prepare(
+    `DELETE FROM upload_jobs 
+     WHERE user_id = ? AND status IN ('completed', 'failed', 'canceled')`
+  ).bind(userId).run();
+
+  const now = new Date().toISOString();
+  // 2. Clean up any batches that now have no surviving jobs,
+  // and update item_count for any remaining batches.
+  await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM upload_batches
+       WHERE user_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM upload_jobs WHERE upload_jobs.batch_id = upload_batches.id
+         )`
+    ).bind(userId),
+    env.DB.prepare(
+      `UPDATE upload_batches
+       SET item_count = (
+             SELECT COUNT(*) FROM upload_jobs WHERE upload_jobs.batch_id = upload_batches.id
+           ),
+           updated_at = ?,
+           version = version + 1
+       WHERE user_id = ?`
+    ).bind(now, userId),
+  ]);
+
+  return { deletedCount: deleteResult.meta?.changes ?? 0 };
+}
+
 async function getBatchById(
   env: Env,
   batchId: string

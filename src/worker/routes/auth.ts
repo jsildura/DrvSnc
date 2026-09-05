@@ -6,6 +6,7 @@ import {
   fetchGoogleProfile,
 } from '../services/googleAuth';
 import {
+  decryptSecret,
   encryptSecret,
   generateSecureRandomString,
   hashOpaqueToken,
@@ -16,6 +17,7 @@ import {
   deleteSession,
   parseCookies,
   isSecureRequest,
+  requireSession,
   AuthenticatedSession,
 } from '../middleware/session';
 import { requireCsrf } from '../middleware/csrf';
@@ -67,8 +69,26 @@ function clearedOauthStateCookie(isSecure: boolean): string {
 
 authRoutes.get('/google/start', async (c) => {
   const loginHint = c.req.query('login_hint');
-  const origin = c.env.APP_ORIGIN || new URL(c.req.url).origin;
-  const redirectUri = `${origin}/api/v1/auth/google/callback`;
+
+  // Validate APP_ORIGIN is set
+  if (!c.env.APP_ORIGIN) {
+    return c.json(
+      { error: 'APP_ORIGIN environment variable is required' },
+      500
+    );
+  }
+
+  // Validate APP_ORIGIN is a valid URL
+  try {
+    new URL(c.env.APP_ORIGIN);
+  } catch {
+    return c.json(
+      { error: 'Invalid APP_ORIGIN configuration' },
+      500
+    );
+  }
+
+  const redirectUri = `${c.env.APP_ORIGIN}/api/v1/auth/google/callback`;
 
   const { url, state, codeVerifier } = await createAuthorizationUrl(c.env, {
     redirectUri,
@@ -110,17 +130,35 @@ authRoutes.get('/google/callback', async (c) => {
     return c.redirect('/login?error=state_mismatch', 302);
   }
 
+  // Check if state exists at all (distinguishing missing from expired)
+  const allStates = await c.env.DB.prepare(
+    `SELECT expires_at FROM oauth_states WHERE state = ?`
+  )
+    .bind(state)
+    .first<{ expires_at: string }>();
+
+  if (!allStates) {
+    return c.redirect('/login?error=invalid_state&reason=not_found', 302);
+  }
+
+  if (new Date(allStates.expires_at) < new Date()) {
+    // Clean up expired state
+    await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
+    c.header('Set-Cookie', clearedOauthStateCookie(isSecureRequest(c)), { append: true });
+    return c.redirect('/login?error=invalid_state&reason=expired', 302);
+  }
+
   // One statement, so two concurrent callbacks cannot both come away with the verifier.
   const stateRecord = await c.env.DB.prepare(
     `DELETE FROM oauth_states
-     WHERE state = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state = ?
      RETURNING code_verifier, redirect_uri`
   )
     .bind(state)
     .first<{ code_verifier: string; redirect_uri: string }>();
 
   if (!stateRecord) {
-    return c.redirect('/login?error=invalid_state', 302);
+    return c.redirect('/login?error=invalid_state&reason=not_found', 302);
   }
 
   // Spent, whichever way the rest of this goes.
@@ -158,7 +196,7 @@ authRoutes.get('/google/callback', async (c) => {
        revoked_at = NULL
      RETURNING id`
   )
-    .bind(userId, profile.sub, profile.email, profile.name, profile.picture || null)
+    .bind(userId, profile.sub, profile.email, profile.name, profile.picture ?? null)
     .first<{ id: string }>();
 
   const activeUserId = userRow?.id || userId;
@@ -210,6 +248,9 @@ authRoutes.get('/google/callback', async (c) => {
     await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(oldTokenHash).run();
   }
 
+  // Invalidate ALL existing sessions for this user upon re-login
+  await c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(activeUserId).run();
+
   // Create new session
   const session = await createSession(c.env, activeUserId);
 
@@ -229,6 +270,14 @@ authRoutes.get('/google/callback', async (c) => {
   );
 
   return c.redirect('/uploads?auth=success', 302);
+});
+
+authRoutes.post('/revoke-all-sessions', requireSession, async (c) => {
+  const user = c.get('user');
+  if (user?.id) {
+    await c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id).run();
+  }
+  return c.json({ success: true });
 });
 
 authRoutes.post('/logout', requireCsrf, async (c) => {
@@ -259,5 +308,77 @@ authRoutes.post('/logout', requireCsrf, async (c) => {
 
   return c.json({ success: true });
 });
+
+async function exchangeRefreshToken(
+  env: Env,
+  refreshToken: string
+): Promise<{ accessToken: string; refreshToken?: string }> {
+  const params = new URLSearchParams();
+  params.set('client_id', env.GOOGLE_CLIENT_ID);
+  params.set('client_secret', env.GOOGLE_CLIENT_SECRET);
+  params.set('refresh_token', refreshToken);
+  params.set('grant_type', 'refresh_token');
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Google OAuth token refresh failed with status ${res.status}`);
+  }
+
+  const json = (await res.json()) as {
+    access_token: string;
+    refresh_token?: string;
+  };
+
+  return {
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token,
+  };
+}
+
+export async function refreshAccessToken(env: Env, userId: string): Promise<string> {
+  const creds = await env.DB.prepare(
+    `SELECT ciphertext, iv FROM google_credentials WHERE user_id = ?`
+  )
+    .bind(userId)
+    .first<{ ciphertext: string; iv: string }>();
+
+  if (!creds) {
+    throw new Error('No Google credentials found for user');
+  }
+
+  const refreshToken = await decryptSecret(
+    creds.ciphertext,
+    creds.iv,
+    env.TOKEN_ENCRYPTION_KEY,
+    userId
+  );
+
+  const newTokenResp = await exchangeRefreshToken(env, refreshToken);
+
+  // If Google issued a new refresh token, store it (token rotation)
+  if (newTokenResp.refreshToken) {
+    const encrypted = await encryptSecret(
+      newTokenResp.refreshToken,
+      env.TOKEN_ENCRYPTION_KEY,
+      userId
+    );
+    await env.DB.prepare(
+      `UPDATE google_credentials
+       SET ciphertext = ?, iv = ?, key_version = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE user_id = ?`
+    )
+      .bind(encrypted.ciphertext, encrypted.iv, encrypted.keyVersion, userId)
+      .run();
+  }
+
+  return newTokenResp.accessToken;
+}
 
 export { authRoutes };

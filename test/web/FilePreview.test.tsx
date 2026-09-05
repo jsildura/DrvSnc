@@ -365,7 +365,7 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     });
   });
 
-  it('renders a direct PDF from the authenticated download endpoint', async () => {
+  it('renders a PDF using Google Drive built-in preview viewer', async () => {
     const fetchMock = vi.fn(async () => pdfResponse());
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -380,12 +380,37 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
       />
     );
 
-    // No exportMimeType: a real PDF already has bytes to stream.
+    const frame = await waitFor(() => {
+      const el = document.querySelector('iframe[src*="drive.google.com/file/d/pdf-1/preview"]');
+      expect(el).not.toBeNull();
+      return el as HTMLIFrameElement;
+    });
+
+    expect(frame.getAttribute('src')).toBe('https://drive.google.com/file/d/pdf-1/preview');
+    expect(frame.getAttribute('title')).toBe('quarterly_report.pdf');
+    // We should not download binary bytes over fetch when using Google Drive's built-in previewer
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('renders a local or staged PDF via object blob if fileId is not present', async () => {
+    const fetchMock = vi.fn(async () => pdfResponse());
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId=""
+        fileName="local_file.pdf"
+        mimeType="application/pdf"
+        fileUrl="blob:local-pdf"
+      />
+    );
+
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/v1/drive/files/pdf-1/download');
+      expect(fetchMock).toHaveBeenCalledWith('blob:local-pdf');
     });
     await waitFor(() => expect(pdfObjectData()).toBe('blob:mock/1#zoom=100'));
-    expect(document.querySelector('iframe[src*="google.com"]')).toBeNull();
   });
 
   it('surfaces an export failure with an escape hatch instead of a blank frame', async () => {

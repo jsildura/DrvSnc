@@ -80,7 +80,7 @@ function DashboardShell() {
                   onClick={() => setActiveTab(item.id)}
                   className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-sm font-medium transition-all ${
                     isActive
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                      ? 'bg-white dark:bg-slate-900 text-accent dark:text-accent-textDark shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
@@ -188,7 +188,7 @@ function DashboardShell() {
                 onClick={() => setActiveTab(item.id)}
                 className={`flex flex-col items-center justify-center gap-1 transition-colors ${
                   isActive
-                    ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
+                    ? 'text-accent dark:text-accent-textDark font-semibold'
                     : 'text-slate-500 dark:text-slate-400'
                 }`}
               >

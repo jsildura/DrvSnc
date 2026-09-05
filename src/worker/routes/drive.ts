@@ -240,9 +240,10 @@ driveRoutes.get('/shared', async (c) => {
   const user = c.get('user')!;
   const pageSize = c.req.query('pageSize') ? parseInt(c.req.query('pageSize')!, 10) : undefined;
   const pageToken = c.req.query('pageToken');
+  const query = c.req.query('query');
 
   try {
-    const page = await listShared(c.env, user.id, { pageSize, pageToken });
+    const page = await listShared(c.env, user.id, { pageSize, pageToken, query });
     return c.json(page);
   } catch (err) {
     const e = err as ErrorLike;

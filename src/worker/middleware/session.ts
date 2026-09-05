@@ -30,7 +30,11 @@ export function parseCookies(cookieHeader?: string): Record<string, string> {
     const name = parts[0]?.trim();
     const value = parts.slice(1).join('=').trim();
     if (name) {
-      list[name] = decodeURIComponent(value);
+      try {
+        list[name] = decodeURIComponent(value);
+      } catch {
+        console.warn(`Malformed cookie value for ${name}`);
+      }
     }
   });
 
@@ -101,6 +105,9 @@ export const sessionMiddleware: MiddlewareHandler<{
           )
             .bind(row.session_id)
             .run()
+            .catch((err) => {
+              console.error('Failed to update session activity:', err);
+            })
         );
       }
     }
@@ -146,18 +153,28 @@ export async function createSession(
   const expiresDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const expiresAt = expiresDate.toISOString();
 
-  await env.DB.prepare(
-    `INSERT INTO sessions (id, user_id, token_hash, csrf_token, expires_at)
-     VALUES (?, ?, ?, ?, ?)`
-  )
-    .bind(sessionId, userId, tokenHash, csrfToken, expiresAt)
-    .run();
+  try {
+    const result = await env.DB.prepare(
+      `INSERT INTO sessions (id, user_id, token_hash, csrf_token, expires_at)
+       VALUES (?, ?, ?, ?, ?)
+       RETURNING id`
+    )
+      .bind(sessionId, userId, tokenHash, csrfToken, expiresAt)
+      .first<{ id: string }>();
 
-  return {
-    token: rawToken,
-    csrfToken,
-    expiresAt,
-  };
+    if (!result) {
+      throw new Error('Failed to create session');
+    }
+
+    return {
+      token: rawToken,
+      csrfToken,
+      expiresAt,
+    };
+  } catch (error) {
+    console.error('Session creation failed:', error);
+    throw new Error('Failed to create session');
+  }
 }
 
 export async function deleteSession(env: Env, sessionId: string): Promise<void> {

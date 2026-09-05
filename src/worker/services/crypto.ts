@@ -1,20 +1,22 @@
 // Utilities for AES-GCM encryption, SHA-256 hashing, and timing-safe comparison
 
 function parseKeyBytes(key?: string): Uint8Array {
-  const safeKey = key || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  if (!key) {
+    throw new Error('TOKEN_ENCRYPTION_KEY environment variable is required');
+  }
 
   // If 64 hex chars (32 bytes)
-  if (/^[0-9a-fA-F]{64}$/.test(safeKey)) {
+  if (/^[0-9a-fA-F]{64}$/.test(key)) {
     const bytes = new Uint8Array(32);
     for (let i = 0; i < 32; i++) {
-      bytes[i] = parseInt(safeKey.substring(i * 2, i * 2 + 2), 16);
+      bytes[i] = parseInt(key.substring(i * 2, i * 2 + 2), 16);
     }
     return bytes;
   }
 
   // If base64 encoded
   try {
-    const binaryStr = atob(safeKey);
+    const binaryStr = atob(key);
     if (binaryStr.length === 32) {
       const bytes = new Uint8Array(32);
       for (let i = 0; i < 32; i++) {
@@ -23,16 +25,11 @@ function parseKeyBytes(key?: string): Uint8Array {
       return bytes;
     }
   } catch {
-    // fallback to text encoder
+    // Fall through
   }
 
-  // Fallback: coerce the raw key text to exactly 32 bytes. Slicing the *string*
-  // is not enough — a single multi-byte character makes the encoded result
-  // longer than 32 bytes and importKey then rejects it as an invalid AES key.
-  const encoded = new TextEncoder().encode(safeKey);
-  const bytes = new Uint8Array(32).fill(0x30); // '0' padding
-  bytes.set(encoded.subarray(0, 32));
-  return bytes;
+  // If not valid format, throw error
+  throw new Error('TOKEN_ENCRYPTION_KEY must be 64 hex characters or valid base64 (32 bytes)');
 }
 
 function bufferToBase64(buf: ArrayBuffer | Uint8Array): string {
@@ -138,12 +135,13 @@ export function generateSecureRandomString(bytesCount = 32): string {
 
 export function timingSafeEqual(a: string, b: string): boolean {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  let mismatch = a.length === b.length ? 0 : 1;
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const codeA = a.charCodeAt(i) || 0;
-    const codeB = b.charCodeAt(i) || 0;
-    mismatch |= codeA ^ codeB;
+
+  // Ensure both strings are the same length before comparison
+  if (a.length !== b.length) return false;
+
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
 }

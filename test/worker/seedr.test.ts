@@ -24,7 +24,7 @@ describe('Seedr Client Service', () => {
   let dbStore: Record<string, any> = {};
 
   const mockEnv: any = {
-    TOKEN_ENCRYPTION_KEY: 'test-key-32-chars-long-1234567890',
+    TOKEN_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
     DB: {
       prepare: vi.fn((query: string) => ({
         bind: (...args: any[]) => ({

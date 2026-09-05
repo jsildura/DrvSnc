@@ -572,13 +572,24 @@ export default function FilePreview({
 
   // Main file loading effect based on previewKind
   useEffect(() => {
-    if (!open || !fileId) return;
+    if (!open || (!fileId && !fileUrl)) return;
 
     let isSubscribed = true;
     setLoading(true);
 
-    // 1. Google Workspace Files (.gdoc, .gsheet, .gslide) OR native PDF (.pdf)
-    if (previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide' || previewKind === 'pdf') {
+    // 1. Google Drive built-in PDF viewer
+    if (previewKind === 'pdf' && fileId) {
+      const timer = setTimeout(() => {
+        if (isSubscribed) setLoading(false);
+      }, 3000);
+      return () => {
+        isSubscribed = false;
+        clearTimeout(timer);
+      };
+    }
+
+    // 2. Google Workspace Files (.gdoc, .gsheet, .gslide) OR fallback native PDF without fileId
+    if (previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide' || (previewKind === 'pdf' && !fileId)) {
       const exportUrl =
         previewKind === 'pdf'
           ? fileUrl
@@ -760,7 +771,7 @@ export default function FilePreview({
   // ---------------------------------------------------------------------------
   // Document zoom
   // ---------------------------------------------------------------------------
-  const isDocumentViewer = isDocumentKind(previewKind);
+  const isDocumentViewer = isDocumentKind(previewKind) && !(previewKind === 'pdf' && Boolean(fileId));
 
   const zoomDocIn = useCallback(() => {
     setDocFitWidth(false);
@@ -864,14 +875,17 @@ export default function FilePreview({
         e.preventDefault();
         handleNext();
       } else if (e.key === '+' || e.key === '=') {
+        if (previewKind === 'pdf' && fileId) return;
         e.preventDefault();
         if (isDocumentViewer) zoomDocIn();
         else setZoom((prev) => Math.min(5, prev + 0.25));
       } else if (e.key === '-' || e.key === '_') {
+        if (previewKind === 'pdf' && fileId) return;
         e.preventDefault();
         if (isDocumentViewer) zoomDocOut();
         else setZoom((prev) => Math.max(0.25, prev - 0.25));
       } else if (e.key === '0') {
+        if (previewKind === 'pdf' && fileId) return;
         e.preventDefault();
         if (isDocumentViewer) {
           resetDocZoom();
@@ -1365,8 +1379,18 @@ export default function FilePreview({
             </div>
           )}
 
-          {/* ======================= GOOGLE DOCS / SHEETS / SLIDES & PDF VIEWER ======================= */}
-          {(previewKind === 'pdf' || previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide') && (
+          {/* ======================= GOOGLE DRIVE BUILT-IN PDF VIEWER ======================= */}
+          {previewKind === 'pdf' && fileId ? (
+            <div className="w-full h-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
+              <iframe
+                src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
+                title={fileName}
+                className="w-full h-full border-none rounded-2xl"
+                allow="autoplay; encrypted-media; fullscreen"
+                onLoad={() => setLoading(false)}
+              />
+            </div>
+          ) : (previewKind === 'pdf' || previewKind === 'gdoc' || previewKind === 'gsheet' || previewKind === 'gslide') ? (
             <div className="w-full h-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
               {pdfError ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -1402,7 +1426,7 @@ export default function FilePreview({
                 </object>
               ) : null}
             </div>
-          )}
+          ) : null}
 
           {/* ======================= WORD (.DOCX) NATIVE VIEWER ======================= */}
           {previewKind === 'docx' && (

@@ -9,6 +9,33 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem('gdu_theme');
+        var isDark = theme === 'dark' || ((!theme || theme === 'system') && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+
+        var color = localStorage.getItem('gdu_accent_color');
+        if (color && color !== 'drive' && color !== 'default' && color.startsWith('#')) {
+          document.documentElement.style.setProperty('--color-accent', color);
+          document.documentElement.style.setProperty('--color-accent-text', color);
+          var c = color.substring(1);
+          if (c.length === 3) c = c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+          var r = parseInt(c.substring(0, 2), 16), g = parseInt(c.substring(2, 4), 16), b = parseInt(c.substring(4, 6), 16);
+          var toLinear = function (v) { var s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+          var lum = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+          var contrast = lum > 0.55 ? '#0f172a' : '#ffffff';
+          document.documentElement.style.setProperty('--color-accent-contrast', contrast);
+          document.documentElement.style.setProperty('--color-accent-on', contrast);
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 
 <body>

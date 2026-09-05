@@ -311,5 +311,59 @@ describe('Durable Upload Job API (/api/v1/jobs)', () => {
         .first();
       expect(check).toBeNull();
     });
+
+    it('DELETE /api/v1/jobs/history clears all terminal jobs for the user while keeping active jobs and other users jobs', async () => {
+      const activeJobId = 'job-active-user-a';
+      const termJob1Id = 'job-term-1-user-a';
+      const termJob2Id = 'job-term-2-user-a';
+      const otherUserTermJobId = 'job-term-user-b';
+
+      // Insert active job for user A
+      await env.DB.prepare(
+        `INSERT INTO upload_jobs (id, user_id, source_kind, filename, file_size, mime_type, status)
+         VALUES (?, ?, 'remote', 'active.iso', 1000, 'application/x-iso9660-image', 'uploading')`
+      ).bind(activeJobId, userIdA).run();
+
+      // Insert terminal jobs for user A
+      await env.DB.prepare(
+        `INSERT INTO upload_jobs (id, user_id, source_kind, filename, file_size, mime_type, status)
+         VALUES (?, ?, 'remote', 'done1.zip', 2000, 'application/zip', 'completed'),
+                (?, ?, 'remote', 'done2.tar', 3000, 'application/x-tar', 'failed')`
+      ).bind(termJob1Id, userIdA, termJob2Id, userIdA).run();
+
+      // Insert terminal job for user B
+      await env.DB.prepare(
+        `INSERT INTO upload_jobs (id, user_id, source_kind, filename, file_size, mime_type, status)
+         VALUES (?, ?, 'remote', 'user-b-done.zip', 4000, 'application/zip', 'completed')`
+      ).bind(otherUserTermJobId, userIdB).run();
+
+      const res = await SELF.fetch('https://example.com/api/v1/jobs/history', {
+        method: 'DELETE',
+        headers: {
+          Cookie: cookieA,
+          'X-CSRF-Token': csrfTokenA,
+          Origin: 'https://example.com',
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json<{ success: boolean; deletedCount: number }>();
+      expect(data.success).toBe(true);
+      expect(data.deletedCount).toBeGreaterThanOrEqual(2);
+
+      // Terminal jobs for user A are deleted
+      const checkTerm1 = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ?').bind(termJob1Id).first();
+      const checkTerm2 = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ?').bind(termJob2Id).first();
+      expect(checkTerm1).toBeNull();
+      expect(checkTerm2).toBeNull();
+
+      // Active job for user A is preserved
+      const checkActive = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ?').bind(activeJobId).first();
+      expect(checkActive).not.toBeNull();
+
+      // Other user's terminal job is preserved
+      const checkUserB = await env.DB.prepare('SELECT * FROM upload_jobs WHERE id = ?').bind(otherUserTermJobId).first();
+      expect(checkUserB).not.toBeNull();
+    });
   });
 });

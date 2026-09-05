@@ -20,6 +20,31 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
+export function SeedrBannerSkeleton() {
+  return (
+    <div
+      className="p-3 sm:p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-900/50 flex flex-wrap items-center justify-between gap-2 sm:gap-3 text-[11px] sm:text-xs animate-pulse"
+      aria-label="Loading Seedr account status"
+      data-testid="seedr-banner-skeleton"
+    >
+      <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+        <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-slate-300 dark:bg-slate-700 shrink-0" />
+        <div className="h-3 sm:h-3.5 w-32 sm:w-40 rounded-md bg-slate-200/80 dark:bg-slate-700/80" />
+        <div className="h-4 sm:h-4.5 w-16 sm:w-20 rounded-full bg-slate-200/80 dark:bg-slate-800 shrink-0" />
+      </div>
+
+      <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 sm:min-w-[130px]">
+          <div className="w-20 sm:w-24 h-1.5 sm:h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden" />
+          <div className="h-3 w-16 sm:w-20 rounded-md bg-slate-200/80 dark:bg-slate-700/80 shrink-0" />
+        </div>
+
+        <div className="h-5 sm:h-6 w-14 sm:w-16 rounded-md sm:rounded-lg bg-slate-200/80 dark:bg-slate-700/80 shrink-0" />
+      </div>
+    </div>
+  );
+}
+
 export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) {
   const [statusLoading, setStatusLoading] = useState(true);
   const [seedrStatus, setSeedrStatus] = useState<SeedrStatusResponse>({ connected: false });
@@ -97,6 +122,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
       await loginSeedrAccount(seedrEmail.trim(), seedrPassword.trim());
       setSeedrPassword('');
       setSeedrEmail('');
+      setStatusLoading(true);
       await fetchStatus();
     } catch (err) {
       setAuthError((err as Error).message || 'Failed to login with Seedr account');
@@ -218,8 +244,32 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
 
   if (statusLoading) {
     return (
-      <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-        Loading Seedr integration status...
+      <div
+        className="space-y-6"
+        aria-label="Loading Seedr integration status"
+        data-testid="seedr-loading-skeleton"
+      >
+        <SeedrBannerSkeleton />
+
+        {/* Magnet Form Skeletons */}
+        <div className="space-y-5 animate-pulse">
+          <div className="space-y-1.5">
+            <div className="h-3.5 w-20 rounded-md bg-slate-200 dark:bg-slate-800" />
+            <div className="h-20 w-full rounded-2xl bg-slate-200/70 dark:bg-slate-800/70" />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="h-3.5 w-36 rounded-md bg-slate-200 dark:bg-slate-800" />
+            <div className="h-10 w-full rounded-2xl bg-slate-200/70 dark:bg-slate-800/70" />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="h-3.5 w-28 rounded-md bg-slate-200 dark:bg-slate-800" />
+            <div className="h-11 w-full rounded-2xl bg-slate-200/70 dark:bg-slate-800/70" />
+          </div>
+
+          <div className="h-11 w-full rounded-2xl bg-slate-200/80 dark:bg-slate-800/80" />
+        </div>
       </div>
     );
   }
