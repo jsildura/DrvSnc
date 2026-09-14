@@ -379,3 +379,68 @@ export const UpdatePermissionSchema = z.object({
 });
 
 export type UpdatePermissionRequest = z.infer<typeof UpdatePermissionSchema>;
+
+// Archive Extraction Contracts
+export const ExtractInitSchema = z.object({
+  fileId: z.string().min(1).max(128),
+});
+
+export interface ExtractInitResult {
+  fileId: string;
+  fileName: string;
+  fileSize: number;
+  mimeType?: string;
+  accessToken: string;
+  extractMeHost: string;
+}
+
+export const ExtractUploadSchema = z.object({
+  downloadUrl: z.string().url().max(2048),
+  fileName: z.string().min(1).max(255),
+  destinationFolderId: z.string().max(128).optional(),
+});
+
+export type ExtractUploadRequest = z.infer<typeof ExtractUploadSchema>;
+
+export interface ExtractUploadResult {
+  fileId: string;
+  fileName: string;
+  folderId?: string;
+}
+
+export const ARCHIVE_MIME_TYPES = [
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  'application/x-rar-compressed',
+  'application/vnd.rar',
+  'application/x-rar',
+  'application/x-7z-compressed',
+  'application/gzip',
+  'application/x-gzip',
+  'application/x-tar',
+  'application/x-bzip2',
+  'application/x-xz',
+  'application/x-lzma',
+  'application/x-compress',
+] as const;
+
+export const ARCHIVE_EXTENSIONS = [
+  '.zip',
+  '.rar',
+  '.7z',
+  '.tar',
+  '.gz',
+  '.tgz',
+  '.tar.gz',
+  '.tar.bz2',
+  '.bz2',
+  '.xz',
+  '.lzma',
+  '.cab',
+  '.iso',
+  '.dmg',
+  '.jar',
+  '.war',
+  '.001',
+] as const;

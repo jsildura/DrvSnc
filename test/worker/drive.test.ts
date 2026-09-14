@@ -320,4 +320,33 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('POST /api/v1/drive/files/:fileId/extract-init requires auth and CSRF', async () => {
+    const resNoAuth = await SELF.fetch('https://example.com/api/v1/drive/files/file-123/extract-init', {
+      method: 'POST',
+    });
+    expect(resNoAuth.status).toBe(401);
+
+    const resNoCsrf = await SELF.fetch('https://example.com/api/v1/drive/files/file-123/extract-init', {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    });
+    expect(resNoCsrf.status).toBe(403);
+  });
+
+  it('POST /api/v1/drive/files/extract-upload validates body', async () => {
+    const res = await SELF.fetch('https://example.com/api/v1/drive/files/extract-upload', {
+      method: 'POST',
+      headers: {
+        Cookie: cookie,
+        'X-CSRF-Token': csrfToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        downloadUrl: 'not-a-url',
+        fileName: '',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

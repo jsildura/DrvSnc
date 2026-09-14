@@ -18,7 +18,9 @@ import {
 } from '../api/drive';
 import FilePreview from '../../components/FilePreview';
 import ShareModal from '../components/ShareModal';
+import { ExtractArchiveModal } from '../components/ExtractArchiveModal';
 import { driveCache } from '../services/driveCache';
+import { isArchiveFile } from '../../shared/archiveUtils';
 
 
 type DriveViewSection = 'files' | 'shared' | 'trash';
@@ -30,6 +32,11 @@ const TOAST_DURATION_MS = 4000;
 const VIDEO_EXTS = /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|3gp|ts|mts|m2ts|vob|ogv|mpg|mpeg)$/i;
 const AUDIO_EXTS = /\.(mp3|wav|m4a|m4r|flac|ogg|oga|opus|mp2|amr|aac|wma|aiff|aif|alac|ape|ac3|dts|mid|midi)$/i;
 const DOC_EXTS = /\.(pdf|docx?|txt|rtf|odt|html?|epub|mobi|xlsx?|pptx?|csv|xml)$/i;
+
+function isExtractableArchive(item: DriveItemView): boolean {
+  if (item.isFolder) return false;
+  return isArchiveFile(item.name, item.mimeType);
+}
 
 function isConvertibleVideo(item: DriveItemView): boolean {
   if (item.isFolder) return false;
@@ -206,6 +213,7 @@ export function DrivePage() {
   const [previewItem, setPreviewItem] = useState<DriveItemView | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number>(0);
   const [sharingItem, setSharingItem] = useState<DriveItemView | null>(null);
+  const [extractingItem, setExtractingItem] = useState<DriveItemView | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [activeMenuFileId, setActiveMenuFileId] = useState<string | null>(null);
   const [probedQuality, setProbedQuality] = useState<Record<string, string>>({});
@@ -1266,6 +1274,21 @@ export function DrivePage() {
                               <span>Convert Document</span>
                             </button>
                           )}
+                          {isExtractableArchive(item) && (
+                            <button
+                              onClick={() => {
+                                setActiveMenuFileId(null);
+                                setExtractingItem(item);
+                              }}
+                              title="Extract Archive"
+                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                            >
+                              <svg className="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                              </svg>
+                              <span>Extract Archive</span>
+                            </button>
+                          )}
                         </>
                       )}
 
@@ -1858,6 +1881,22 @@ export function DrivePage() {
                                     </button>
                                   )}
 
+                                  {isExtractableArchive(file) && (
+                                    <button
+                                      onClick={() => {
+                                        setActiveMenuFileId(null);
+                                        setExtractingItem(file);
+                                      }}
+                                      title="Extract Archive"
+                                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                                      </svg>
+                                      <span>Extract Archive</span>
+                                    </button>
+                                  )}
+
                                   <button
                                     onClick={() => {
                                       setActiveMenuFileId(null);
@@ -2108,6 +2147,21 @@ export function DrivePage() {
           loadData();
         }}
       />
+
+      {/* Extract Archive Modal */}
+      {extractingItem && (
+        <ExtractArchiveModal
+          isOpen={Boolean(extractingItem)}
+          item={extractingItem}
+          currentFolderId={currentFolderId || undefined}
+          onClose={() => setExtractingItem(null)}
+          onComplete={() => {
+            setExtractingItem(null);
+            loadData(true);
+            showToast('Archive extracted successfully');
+          }}
+        />
+      )}
 
       {/* Action Toasts */}
       {toasts.length > 0 && (

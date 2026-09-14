@@ -3,6 +3,8 @@ import {
   DrivePage,
   QuotaView,
   PermissionView,
+  ExtractInitResult,
+  ExtractUploadResult,
 } from '../../shared/contracts';
 import { apiRequest } from './client';
 
@@ -173,4 +175,41 @@ export async function searchDriveItems(
   if (options?.pageToken) params.set('pageToken', options.pageToken);
   if (options?.pageSize) params.set('pageSize', String(options.pageSize));
   return apiRequest<DrivePage>(`/api/v1/drive/search?${params.toString()}`);
+}
+
+export async function initExtraction(fileId: string): Promise<ExtractInitResult> {
+  return apiRequest<ExtractInitResult>(
+    `/api/v1/drive/files/${encodeURIComponent(fileId)}/extract-init`,
+    { method: 'POST' }
+  );
+}
+
+export async function uploadExtractedToDrive(
+  downloadUrl: string,
+  fileName: string,
+  destinationFolderId?: string
+): Promise<{ success: boolean; file: ExtractUploadResult }> {
+  return apiRequest<{ success: boolean; file: ExtractUploadResult }>(
+    '/api/v1/drive/files/extract-upload',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        downloadUrl,
+        fileName,
+        destinationFolderId,
+      }),
+    }
+  );
+}
+
+export async function unpackArchive(params: {
+  host?: string;
+  tmp_filename: string;
+  archive_filename?: string;
+  password?: string;
+}): Promise<any> {
+  return apiRequest<any>('/api/v1/drive/files/extract-unpack', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
 }

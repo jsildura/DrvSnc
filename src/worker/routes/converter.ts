@@ -387,7 +387,12 @@ converterRoutes.get('/ws', async (c) => {
   const uid = requestedUid || defaultUid;
 
   const isConvertIo = sEncoder.includes('convert.io');
-  const originUrl = isConvertIo ? 'https://convert.io' : 'https://video-converter.com';
+  const isExtractMe = sEncoder.includes('extract.io') || sEncoder.includes('extract.me');
+  const originUrl = isExtractMe
+    ? 'https://extract.me'
+    : isConvertIo
+    ? 'https://convert.io'
+    : 'https://video-converter.com';
 
   const upstreamWsUrl = `https://${sEncoder}/socket.io/?EIO=4&transport=websocket`;
 
@@ -516,6 +521,8 @@ converterRoutes.get('/download', async (c) => {
       'audio-converter.com',
       'convert.io',
       '123apps.io',
+      'extract.me',
+      'extract.io',
     ];
     const isAllowed = ALLOWED_CONVERTER_DOMAINS.some(
       (d) => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`)
@@ -527,6 +534,11 @@ converterRoutes.get('/download', async (c) => {
     const { uidCookie: defaultUid } = await getOrResolveState();
     const uid = c.req.query('uid') || defaultUid;
 
+    const isExtract =
+      parsed.pathname.includes('/unarchiver/') ||
+      parsed.hostname.includes('extract.me') ||
+      parsed.hostname.includes('extract.io');
+
     const isDoc =
       parsed.pathname.includes('/convert/') ||
       parsed.hostname.includes('convert.io') ||
@@ -537,7 +549,9 @@ converterRoutes.get('/download', async (c) => {
       rawTarget.includes('online-audio') ||
       c.req.query('mediaType') === 'audio';
 
-    const originUrl = isDoc
+    const originUrl = isExtract
+      ? 'https://extract.me'
+      : isDoc
       ? 'https://convert.io'
       : isAudio
       ? 'https://online-audio-converter.com'
@@ -587,20 +601,31 @@ converterRoutes.get('/download', async (c) => {
 // Relays Flow.js chunk upload with Chrome browser fingerprint and legitimate uid cookie
 converterRoutes.post('/flow', async (c) => {
   const query = c.req.url.includes('?') ? c.req.url.split('?')[1] : '';
-  const { sEncoder: defaultEncoder, uidCookie: defaultUid } = await getOrResolveState();
   const requestedEncoder = c.req.query('encoder');
   const requestedUid = c.req.query('uid');
   const requestedSiteId = c.req.query('site_id') || 'vconv';
-  const sEncoder = requestedEncoder || defaultEncoder;
-  const uid = requestedUid || defaultUid;
 
-  const targetUrl = `https://${sEncoder}/${requestedSiteId}/upload/flow/${query ? `?${query}` : ''}`;
+  let sEncoder = requestedEncoder;
+  let uid = requestedUid;
+  if (!sEncoder || !uid) {
+    const { sEncoder: defaultEncoder, uidCookie: defaultUid } = await getOrResolveState();
+    sEncoder = sEncoder || defaultEncoder;
+    uid = uid || defaultUid;
+  }
+
+  const upstreamParams = new URLSearchParams(query);
+  upstreamParams.delete('encoder');
+  upstreamParams.delete('site_id');
+  const upstreamQuery = upstreamParams.toString();
+  const targetUrl = `https://${sEncoder}/${requestedSiteId}/upload/flow/${upstreamQuery ? `?${upstreamQuery}` : ''}`;
 
   const contentType = c.req.header('content-type') || '';
   const contentLength = c.req.header('content-length');
 
   const originUrl =
-    requestedSiteId === 'convert'
+    requestedSiteId === 'unarchiver'
+      ? 'https://extract.me'
+      : requestedSiteId === 'convert'
       ? 'https://convert.io'
       : requestedSiteId === 'aconv'
       ? 'https://online-audio-converter.com'
@@ -612,20 +637,19 @@ converterRoutes.post('/flow', async (c) => {
     Cookie: `uid=${uid}`,
   };
 
+  const bodyBuffer = await c.req.raw.arrayBuffer();
+
   if (contentType) {
     forwardHeaders['Content-Type'] = contentType;
   }
-  if (contentLength) {
-    forwardHeaders['Content-Length'] = contentLength;
-  }
+  forwardHeaders['Content-Length'] = String(bodyBuffer.byteLength);
 
   try {
     const upstreamRes = await fetch(targetUrl, {
       method: 'POST',
       headers: forwardHeaders,
-      body: c.req.raw.body,
-      // @ts-expect-error duplex required for streaming request bodies in some environments
-      duplex: 'half',
+      body: bodyBuffer,
+      signal: AbortSignal.timeout(30000),
     });
 
     const responseText = await upstreamRes.text();

@@ -8,6 +8,8 @@ import {
   UpdateDriveItemSchema,
   AddPermissionSchema,
   UpdatePermissionSchema,
+  ExtractUploadSchema,
+  ExtractInitResult,
 } from '../../shared/contracts';
 import {
   listFolders,
@@ -31,7 +33,13 @@ import {
   getExportMimeType,
   getExportMimeTypes,
   getFileMetadata,
+  getValidAccessToken,
 } from '../services/driveClient';
+import {
+  getOrResolveExtractMeHost,
+  uploadExtractedStreamToDrive,
+  DEFAULT_EXTRACT_ME_HOST,
+} from '../services/extractMe';
 
 interface ErrorLike {
   code?: string;
@@ -475,7 +483,7 @@ driveRoutes.post('/trash/empty', requireCsrf, async (c) => {
 // uses (it asks for application/pdf). Without it we try alt=media first and only consult
 // the file's metadata if that fails in a way that suggests the file isn't downloadable —
 // so the common case still costs a single upstream call.
-driveRoutes.get('/files/:fileId/download', async (c) => {
+driveRoutes.on(['GET', 'HEAD'], '/files/:fileId/download', async (c) => {
   const user = c.get('user')!;
   const fileId = c.req.param('fileId');
   const requestedExportMime = c.req.query('exportMimeType');
@@ -527,6 +535,13 @@ driveRoutes.get('/files/:fileId/download', async (c) => {
       headers.set('Content-Disposition', contentDisposition);
     } else if (contentType.includes('pdf')) {
       headers.set('Content-Disposition', 'inline');
+    }
+
+    if (c.req.method.toUpperCase() === 'HEAD') {
+      return new Response(null, {
+        status: upstreamRes.status,
+        headers,
+      });
     }
 
     return new Response(upstreamRes.body, {
@@ -713,6 +728,206 @@ driveRoutes.delete('/files/:fileId/permissions/:permissionId', requireCsrf, asyn
         },
       },
       (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// POST /files/:fileId/extract-init
+driveRoutes.post('/files/:fileId/extract-init', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+  const fileId = c.req.param('fileId');
+
+  try {
+    const metadata = await getFileMetadata(c.env, user.id, fileId);
+    const accessToken = await getValidAccessToken(c.env, user.id, false);
+    const { sEncoder } = await getOrResolveExtractMeHost();
+
+    const rawSize = metadata.size;
+    const parsedSize =
+      typeof rawSize === 'number'
+        ? rawSize
+        : typeof rawSize === 'string'
+        ? parseInt(rawSize, 10) || 0
+        : 0;
+
+    const response: ExtractInitResult = {
+      fileId: metadata.id,
+      fileName: metadata.name,
+      fileSize: parsedSize,
+      mimeType: metadata.mimeType,
+      accessToken,
+      extractMeHost: sEncoder,
+    };
+
+    return c.json(response);
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_EXTRACT_INIT_FAILED',
+          message: e.message || 'Failed to initialize archive extraction',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// POST /files/extract-upload
+driveRoutes.post('/files/extract-upload', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_JSON',
+          message: 'Invalid request body',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const parsed = ExtractUploadSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parsed.error.issues[0]?.message || 'Invalid parameters',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  try {
+    const result = await uploadExtractedStreamToDrive(c.env, user.id, {
+      downloadUrl: parsed.data.downloadUrl,
+      fileName: parsed.data.fileName,
+      destinationFolderId: parsed.data.destinationFolderId,
+    });
+
+    return c.json({ success: true, file: result });
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_EXTRACT_UPLOAD_FAILED',
+          message: e.message || 'Failed to upload extracted file to Google Drive',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// POST /files/extract-unpack
+// Proxies unpack request to extract.me engine with valid Origin and Referer
+driveRoutes.post('/files/extract-unpack', requireCsrf, async (c) => {
+  let body: {
+    host?: string;
+    tmp_filename?: string;
+    archive_filename?: string;
+    password?: string;
+  };
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_JSON',
+          message: 'Invalid request body',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const { host = DEFAULT_EXTRACT_ME_HOST, tmp_filename, archive_filename, password = '' } = body;
+  if (!tmp_filename) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Missing tmp_filename',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const targetUrl = `https://${host}/unarchiver/unpack/`;
+  const postParams = new URLSearchParams({
+    tmp_filename,
+    archive_filename: archive_filename || '',
+    password,
+  });
+
+  try {
+    const upstreamRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Origin: 'https://extract.me',
+        Referer: 'https://extract.me/',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      body: postParams.toString(),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    const responseText = await upstreamRes.text();
+    let jsonResult: any;
+    try {
+      jsonResult = JSON.parse(responseText);
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: 'UPSTREAM_ERROR',
+            message: responseText || 'Invalid upstream response',
+            retriable: true,
+            requestId: c.get('requestId') || 'req-id',
+          },
+        },
+        502
+      );
+    }
+
+    return c.json(jsonResult);
+  } catch (err) {
+    return c.json(
+      {
+        error: {
+          code: 'DRIVE_EXTRACT_UNPACK_FAILED',
+          message: (err as Error).message || 'Failed to proxy unpack request',
+          retriable: true,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      502
     );
   }
 });
