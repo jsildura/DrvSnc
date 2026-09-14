@@ -71,6 +71,7 @@
       ]
     },
     "production": {
+      "name": "drvsnc",
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "production",
