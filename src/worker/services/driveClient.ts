@@ -1089,6 +1089,34 @@ export async function exportFile(
   );
 }
 
+export async function createEmptyDriveFile(
+  env: Env,
+  userId: string,
+  metadata: { name: string; mimeType: string; folderId?: string }
+): Promise<{ id: string }> {
+  return withDriveAuth(env, userId, async (token) => {
+    const res = await fetch(`${DRIVE_API_BASE}/files`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: metadata.name,
+        mimeType: metadata.mimeType,
+        parents: metadata.folderId ? [metadata.folderId] : undefined,
+      }),
+    });
+
+    if (!res.ok) {
+      const mapped = mapDriveError(res.status);
+      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+    }
+
+    return (await res.json()) as { id: string };
+  });
+}
+
 export async function startResumableUpload(
   env: Env,
   userId: string,

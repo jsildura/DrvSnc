@@ -187,7 +187,8 @@ export async function initExtraction(fileId: string): Promise<ExtractInitResult>
 export async function uploadExtractedToDrive(
   downloadUrl: string,
   fileName: string,
-  destinationFolderId?: string
+  destinationFolderId?: string,
+  fileSize?: number
 ): Promise<{ success: boolean; file: ExtractUploadResult }> {
   return apiRequest<{ success: boolean; file: ExtractUploadResult }>(
     '/api/v1/drive/files/extract-upload',
@@ -197,6 +198,7 @@ export async function uploadExtractedToDrive(
         downloadUrl,
         fileName,
         destinationFolderId,
+        fileSize,
       }),
     }
   );

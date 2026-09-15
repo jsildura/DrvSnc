@@ -840,6 +840,7 @@ driveRoutes.post('/files/extract-upload', requireCsrf, async (c) => {
       downloadUrl: parsed.data.downloadUrl,
       fileName: parsed.data.fileName,
       destinationFolderId: parsed.data.destinationFolderId,
+      fileSize: parsed.data.fileSize,
     });
 
     return c.json({ success: true, file: result });

@@ -35,7 +35,7 @@ app.use('*', async (c, next) => {
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   c.header(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com wss://*.video-converter.com https://*.video-converter.com https://*.convert.io wss://*.convert.io http://localhost:8787 ws://localhost:8787 http://127.0.0.1:8787 ws://127.0.0.1:8787; frame-src 'self' https://drive.google.com https://docs.google.com blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com https://*.google.com https://drive.google.com; font-src 'self' data:; connect-src 'self' https://*.r2.cloudflarestorage.com wss://*.video-converter.com https://*.video-converter.com https://*.convert.io wss://*.convert.io https://*.extract.me wss://*.extract.me https://*.extract.io wss://*.extract.io http://localhost:8787 ws://localhost:8787 http://127.0.0.1:8787 ws://127.0.0.1:8787; frame-src 'self' https://drive.google.com https://docs.google.com blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
   );
 
   if (c.req.url.startsWith('https://')) {

@@ -627,7 +627,14 @@ export class ExtractMeClient {
       const name = node.text || 'Unnamed';
       const currentPath = [...parentPath, name];
       const fullPath = currentPath.join('/');
-      const isFolder = Boolean(node.children && Array.isArray(node.children) && node.children.length > 0);
+      const isFolder = Boolean(
+        node.data?.isDir ||
+        (node as any).type === 'folder' ||
+        (node as any).type === 'dir' ||
+        node.icon === 'folder' ||
+        (typeof node.icon === 'string' && node.icon.includes('folder')) ||
+        Array.isArray(node.children)
+      );
 
       items.push({
         id: node.id || `node_${fullPath}_${i}`,

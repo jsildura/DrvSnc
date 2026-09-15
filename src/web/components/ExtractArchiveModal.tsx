@@ -311,9 +311,10 @@ export function ExtractArchiveModal({
         finalFolderId = folderRes.id;
       }
 
-      const selectedFiles = nonFolderFiles.filter((f) => selectedPaths.has(f.fullPath));
+      const selectedFiles = nonFolderFiles.filter((f) => !f.isFolder && selectedPaths.has(f.fullPath));
+      const selectedFolders = flattenedFiles.filter((f) => f.isFolder && selectedPaths.has(f.fullPath));
 
-      if (selectedFiles.length === 0) {
+      if (selectedFiles.length === 0 && selectedFolders.length === 0) {
         setErrorMessage('No files selected for extraction.');
         setModalState('error');
         return;
@@ -347,9 +348,24 @@ export function ExtractArchiveModal({
         return currentParentId;
       };
 
+      // Pre-create any selected folder directories (including empty directories)
+      for (const folder of selectedFolders) {
+        await getOrCreateDestinationFolder(folder.path);
+      }
+
+      if (selectedFiles.length === 0) {
+        // Only empty folders were selected and created
+        setModalState('complete');
+        return;
+      }
+
       // Upload each selected file to its corresponding Google Drive folder
       let count = 0;
+      const failedFiles: string[] = [];
+
       for (const file of selectedFiles) {
+        if (file.isFolder) continue;
+
         count++;
         setSaveProgress({ current: count, total: selectedFiles.length });
         setSaveStatus(`Uploading file ${count} of ${selectedFiles.length}: ${file.name}`);
@@ -359,7 +375,31 @@ export function ExtractArchiveModal({
 
         const { directUrl } = clientRef.current.getFileDownloadUrl(tmpFilename, file.path, file.name);
 
-        await uploadExtractedToDrive(directUrl, file.name, folderForFile);
+        let success = false;
+        let lastErr: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            await uploadExtractedToDrive(directUrl, file.name, folderForFile, file.size);
+            success = true;
+            break;
+          } catch (uploadErr) {
+            lastErr = uploadErr;
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 800));
+            }
+          }
+        }
+
+        if (!success) {
+          console.error(`Failed to upload ${file.name}:`, lastErr);
+          failedFiles.push(file.name);
+        }
+      }
+
+      if (failedFiles.length > 0) {
+        if (failedFiles.length === selectedFiles.length) {
+          throw new Error(`Failed to save files: ${failedFiles.slice(0, 3).join(', ')}${failedFiles.length > 3 ? ` (+${failedFiles.length - 3} more)` : ''}`);
+        }
       }
 
       setModalState('complete');

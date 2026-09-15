@@ -12,8 +12,8 @@
     "SESSION_SECRET": "session-secret-key-32-chars-minimum!",
     "GOOGLE_CLIENT_ID": "dev-web-uploader.apps.googleusercontent.com",
     "GOOGLE_CLIENT_SECRET": "dev-google-client-secret-placeholder",
-    "APP_ORIGIN": "http://localhost:8787",
-    "ENVIRONMENT": "development"
+    "APP_ORIGIN": "https://drvsnc.my-files-directory.workers.dev",
+    "ENVIRONMENT": "production"
   },
   "assets": {
     "directory": "./dist",
@@ -25,15 +25,15 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "gdu-db-local",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "gdu-db-prod",
+      "database_id": "762a826f-15ad-44e3-ab92-2876f8343ebb",
       "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "UPLOADS",
-      "bucket_name": "gdu-uploads-local"
+      "bucket_name": "gdu-uploads-prod"
     }
   ],
   "workflows": [
@@ -79,7 +79,11 @@
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "production",
-        "APP_ORIGIN": "https://drvsnc.my-files-directory.workers.dev"
+        "APP_ORIGIN": "https://drvsnc.my-files-directory.workers.dev",
+        "TOKEN_ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "SESSION_SECRET": "session-secret-key-32-chars-minimum!",
+        "GOOGLE_CLIENT_ID": "dev-web-uploader.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET": "dev-google-client-secret-placeholder"
       },
       "d1_databases": [
         {

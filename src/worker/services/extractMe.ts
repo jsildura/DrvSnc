@@ -1,5 +1,5 @@
 import { Env } from '../env';
-import { startResumableUpload, uploadChunk } from './driveClient';
+import { startResumableUpload, uploadChunk, createEmptyDriveFile } from './driveClient';
 
 export const EXTRACT_ME_SITE_ID = 'unarchiver';
 export const DEFAULT_EXTRACT_ME_HOST = 's88.extract.me';
@@ -63,9 +63,24 @@ export async function uploadExtractedStreamToDrive(
     downloadUrl: string;
     fileName: string;
     destinationFolderId?: string;
+    fileSize?: number;
   }
 ): Promise<{ fileId: string; fileName: string; folderId?: string }> {
-  const { downloadUrl, fileName, destinationFolderId } = options;
+  const { downloadUrl, fileName, destinationFolderId, fileSize } = options;
+
+  // If known upfront that file is zero bytes, create directly without upstream network calls
+  if (fileSize === 0) {
+    const emptyFile = await createEmptyDriveFile(env, userId, {
+      name: fileName,
+      mimeType: 'application/octet-stream',
+      folderId: destinationFolderId,
+    });
+    return {
+      fileId: emptyFile.id,
+      fileName,
+      folderId: destinationFolderId,
+    };
+  }
 
   // Validate allowed domains for security
   const parsed = new URL(downloadUrl);
@@ -90,6 +105,14 @@ export async function uploadExtractedStreamToDrive(
     Referer: 'https://extract.me/',
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Accept: '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site',
   };
   if (uid) {
     fetchHeaders.Cookie = `uid=${uid}`;
@@ -103,22 +126,24 @@ export async function uploadExtractedStreamToDrive(
       const triggerRes = await fetch(triggerUrl, { headers: fetchHeaders });
       if (!triggerRes.ok) {
         console.warn(`[extractMe] Trigger URL returned status ${triggerRes.status}: ${triggerRes.statusText}`);
+      } else {
+        await triggerRes.text().catch(() => '');
       }
     } catch (err) {
       console.warn('[extractMe] Error calling trigger URL:', err);
     }
   }
 
-  // 2. Fetch the file from extract.me (with retry on 404 in case extraction needs a brief moment to finish writing)
+  // 2. Fetch the file from extract.me (with retry on 404/425 in case extraction needs a moment to finish writing)
   let upstreamRes: Response | null = null;
-  const maxAttempts = 3;
+  const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     upstreamRes = await fetch(downloadUrl, { headers: fetchHeaders });
     if (upstreamRes.ok) {
       break;
     }
-    if (upstreamRes.status === 404 && attempt < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    if ((upstreamRes.status === 404 || upstreamRes.status === 425) && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
       continue;
     }
     break;
@@ -133,6 +158,20 @@ export async function uploadExtractedStreamToDrive(
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream';
   const contentLengthHeader = upstreamRes.headers.get('content-length');
   const totalSize = contentLengthHeader ? parseInt(contentLengthHeader, 10) : null;
+
+  // Handle zero-byte files directly without opening a resumable session
+  if (totalSize === 0) {
+    const emptyFile = await createEmptyDriveFile(env, userId, {
+      name: fileName,
+      mimeType: contentType,
+      folderId: destinationFolderId,
+    });
+    return {
+      fileId: emptyFile.id,
+      fileName,
+      folderId: destinationFolderId,
+    };
+  }
 
   // Initialize resumable upload on Google Drive
   const sessionUrl = await startResumableUpload(env, userId, {
@@ -198,19 +237,12 @@ export async function uploadExtractedStreamToDrive(
 
     if (!finalGoogleFile) {
       if (finalTotal === 0) {
-        // Empty file: complete with bytes */0
-        const emptyRes = await fetch(sessionUrl, {
-          method: 'PUT',
-          headers: {
-            'Content-Range': 'bytes */0',
-            'Content-Length': '0',
-          },
+        // Zero bytes were streamed; create directly in Google Drive
+        finalGoogleFile = await createEmptyDriveFile(env, userId, {
+          name: fileName,
+          mimeType: contentType,
+          folderId: destinationFolderId,
         });
-        if (emptyRes.status === 200 || emptyRes.status === 201) {
-          finalGoogleFile = (await emptyRes.json()) as { id: string };
-        } else {
-          throw new Error(`Google upload empty file failed with status ${emptyRes.status}`);
-        }
       } else if (finalChunkLength > 0) {
         const finalBuffer = currentBuffer.subarray(0, finalChunkLength);
         const res = await uploadChunk(

@@ -398,6 +398,7 @@ export interface ExtractInitResult {
 export const ExtractUploadSchema = z.object({
   downloadUrl: z.string().url().max(2048),
   fileName: z.string().min(1).max(255),
+  fileSize: z.number().int().nonnegative().optional(),
   destinationFolderId: z.string().max(128).optional(),
 });
 

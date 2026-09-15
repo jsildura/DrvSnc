@@ -176,4 +176,62 @@ describe('ExtractMeClient web service', () => {
     expect(res.tree_data).toEqual([{ text: 'file.txt' }]);
     spy.mockRestore();
   });
+
+  it('correctly classifies empty directories with children=[] as folders', async () => {
+    const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
+    const client = new ExtractMeClient('s88.extract.me', 'custom_session_uid');
+
+    const tree = [
+      {
+        text: 'empty_folder',
+        children: [],
+        icon: 'folder',
+      },
+      {
+        text: 'regular_file.txt',
+        data: { size: 100 },
+      },
+    ];
+
+    const flattened = client.flattenTree(tree);
+    expect(flattened).toHaveLength(2);
+    expect(flattened[0].name).toBe('empty_folder');
+    expect(flattened[0].isFolder).toBe(true);
+    expect(flattened[1].name).toBe('regular_file.txt');
+    expect(flattened[1].isFolder).toBe(false);
+  });
 });
+
+describe('uploadExtractedStreamToDrive zero-byte handling', () => {
+  it('creates empty file directly on Google Drive when fileSize is 0 without calling engine', async () => {
+    const { uploadExtractedStreamToDrive } = await import('../../src/worker/services/extractMe');
+    const driveClient = await import('../../src/worker/services/driveClient');
+    const createSpy = vi.spyOn(driveClient, 'createEmptyDriveFile').mockResolvedValue({
+      id: 'empty_file_drive_id',
+    } as any);
+
+    const mockEnv = {} as any;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const res = await uploadExtractedStreamToDrive(mockEnv, 'user-123', {
+      downloadUrl: 'https://s88.extract.me/unarchiver/download_d/uid/tmp/empty.txt',
+      fileName: 'empty.txt',
+      destinationFolderId: 'folder-123',
+      fileSize: 0,
+    });
+
+    expect(res.fileId).toBe('empty_file_drive_id');
+    expect(res.fileName).toBe('empty.txt');
+    expect(createSpy).toHaveBeenCalledWith(mockEnv, 'user-123', {
+      name: 'empty.txt',
+      mimeType: 'application/octet-stream',
+      folderId: 'folder-123',
+    });
+    // Upstream engine should not have been called
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    createSpy.mockRestore();
+    fetchSpy.mockRestore();
+  });
+});
+
