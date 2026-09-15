@@ -114,6 +114,7 @@ export class ExtractMeClient {
     let ws: WebSocket | null = null;
     let isCancelled = false;
     let triedFallback = false;
+    let remoteResolved = false; // guards against double fallback (error msg + onerror/onclose race)
     const operationId = `${Date.now()}_${clientHost.replace(/[^a-zA-Z0-9]/g, '')}_${Math.random().toString(36).substring(2, 8)}`;
     let pid: number | null = null;
     const siteId = 'unarchiver';
@@ -180,7 +181,8 @@ export class ExtractMeClient {
               // ignore
             }
           }
-          if (!isCancelled) {
+          if (!isCancelled && !remoteResolved) {
+            remoteResolved = true;
             // Fallback to chunk upload if WebSocket connection fails
             this.uploadArchiveInChunks({
               fileId: params.fileId,
@@ -196,7 +198,19 @@ export class ExtractMeClient {
         };
 
         socket.onclose = () => {
-          // Closed
+          // If socket closed without final_result or error, fall back to chunked upload
+          if (!isCancelled && !remoteResolved) {
+            remoteResolved = true;
+            this.uploadArchiveInChunks({
+              fileId: params.fileId,
+              fileName: params.fileName,
+              fileSize: params.fileSize,
+              onProgress: params.onProgress,
+              signal: abortController.signal,
+            })
+              .then(resolve)
+              .catch(reject);
+          }
         };
 
         socket.onmessage = (event) => {
@@ -247,6 +261,13 @@ export class ExtractMeClient {
                 gdrive_file_id: params.fileId,
                 secondary: false,
               };
+            } else {
+              // For HTTP stream URLs, match extract.me's expected URL-open format
+              payload.params = {
+                secondary: false,
+                original_filename: params.fileName,
+                filesize: params.fileSize,
+              };
             }
 
             socket.send(`42["open_remote",${JSON.stringify(payload)}]`);
@@ -270,24 +291,28 @@ export class ExtractMeClient {
                     params.onProgress?.(val);
                   }
                 } else if (type === 'final_result') {
+                  remoteResolved = true;
                   resolve({
                     tmp_filename: data.tmp_filename,
                     archive_filename: data.original_filename || params.fileName,
                   });
                   cleanUp();
                 } else if (type === 'error') {
-                  // Remote gdrive open failed on extract.me (e.g. token mismatch), fallback to chunked upload
-                  this.uploadArchiveInChunks({
-                    fileId: params.fileId,
-                    fileName: params.fileName,
-                    fileSize: params.fileSize,
-                    onProgress: params.onProgress,
-                    signal: abortController.signal,
-                  })
-                    .then(resolve)
-                    .catch((chunkErr) => {
-                      reject(chunkErr);
-                    });
+                  // Remote open failed, fallback to chunked upload
+                  if (!remoteResolved) {
+                    remoteResolved = true;
+                    this.uploadArchiveInChunks({
+                      fileId: params.fileId,
+                      fileName: params.fileName,
+                      fileSize: params.fileSize,
+                      onProgress: params.onProgress,
+                      signal: abortController.signal,
+                    })
+                      .then(resolve)
+                      .catch((chunkErr) => {
+                        reject(chunkErr);
+                      });
+                  }
                   cleanUp();
                 } else if (type === 'http_auth_request') {
                   reject(new Error('Archive requires password or authorization'));

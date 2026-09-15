@@ -141,7 +141,11 @@ describe('ExtractMeClient web service', () => {
       expect(parsed[1].remote_url).toBe(
         'https://drvsnc.workers.dev/api/v1/converter/stream/my-archive.zip?ticket=test-ticket'
       );
-      expect(parsed[1].params).toBeUndefined();
+      // HTTP stream URLs must include params matching extract.me's URL-open format
+      expect(parsed[1].params).toBeDefined();
+      expect(parsed[1].params.original_filename).toBe('my-archive.zip');
+      expect(parsed[1].params.filesize).toBe(50000000);
+      expect(parsed[1].params.secondary).toBe(false);
     } finally {
       globalThis.WebSocket = originalWs;
     }
