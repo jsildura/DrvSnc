@@ -12,12 +12,12 @@
    - Application Type: **Web application**.
    - Authorized JavaScript Origins:
      - `http://localhost:8787` (Local development)
-     - `https://staging.streamflix.app` (Staging)
-     - `https://uploader.streamflix.app` (Production)
+     - `https://drvsnc-staging.workers.dev` (Staging)
+     - `https://drvsnc.database-00.workers.dev` (Production)
    - Authorized Redirect URIs:
-     - `http://localhost:8787/api/v1/auth/google/callback`
-     - `https://staging.streamflix.app/api/v1/auth/google/callback`
-     - `https://uploader.streamflix.app/api/v1/auth/google/callback`
+     - `http://localhost:8787/api/auth/google/callback`
+     - `https://drvsnc-staging.workers.dev/api/auth/google/callback`
+     - `https://drvsnc.database-00.workers.dev/api/auth/google/callback`
 
 ---
 

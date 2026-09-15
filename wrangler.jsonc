@@ -3,7 +3,9 @@
   "name": "drvsnc",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-08-18",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "vars": {
     "TOKEN_ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -47,13 +49,15 @@
     }
   ],
   "triggers": {
-    "crons": ["0 0 * * *"]
+    "crons": [
+      "0 0 * * *"
+    ]
   },
   "env": {
     "staging": {
       "vars": {
         "ENVIRONMENT": "staging",
-        "APP_ORIGIN": "https://staging.streamflix.app"
+        "APP_ORIGIN": "https://drvsnc-staging.workers.dev"
       },
       "d1_databases": [
         {
@@ -81,7 +85,7 @@
         {
           "binding": "DB",
           "database_name": "gdu-db-prod",
-          "database_id": "b6be8d06-1472-4e0e-bdd9-353cb400c545",
+          "database_id": "762a826f-15ad-44e3-ab92-2876f8343ebb",
           "migrations_dir": "migrations"
         }
       ],
