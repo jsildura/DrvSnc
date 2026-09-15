@@ -250,6 +250,7 @@ export class ExtractMeClient {
               secondary: false,
               id3: 1,
               ff: 1,
+              ud: 1,
             };
 
             if (effectiveRemoteUrl.startsWith('gdrive://')) {
@@ -260,6 +261,7 @@ export class ExtractMeClient {
                 filesize: params.fileSize,
                 gdrive_file_id: params.fileId,
                 secondary: false,
+                ud: 1,
               };
             } else {
               // For HTTP stream URLs, match extract.me's expected URL-open format
@@ -267,6 +269,7 @@ export class ExtractMeClient {
                 secondary: false,
                 original_filename: params.fileName,
                 filesize: params.fileSize,
+                ud: 1,
               };
             }
 
@@ -521,14 +524,23 @@ export class ExtractMeClient {
       tmp_filename: params.tmp_filename,
       archive_filename: params.archive_filename,
       password: params.password,
+      uid: this.uid,
     });
 
     if (res.error) {
+      const errorMessage =
+        typeof res.error === 'string'
+          ? res.error
+          : res.error_title ||
+            res.error_desc ||
+            res.message ||
+            'Failed to extract archive contents';
+
       return {
         tree_data: [],
         tmp_filename: params.tmp_filename,
         archive_filename: params.archive_filename || 'archive',
-        error: res.error,
+        error: errorMessage,
         error_type: res.error_type,
         message_type: res.message_type,
       };

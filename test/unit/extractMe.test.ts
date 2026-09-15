@@ -146,8 +146,34 @@ describe('ExtractMeClient web service', () => {
       expect(parsed[1].params.original_filename).toBe('my-archive.zip');
       expect(parsed[1].params.filesize).toBe(50000000);
       expect(parsed[1].params.secondary).toBe(false);
+      expect(parsed[1].ud).toBe(1);
+      expect(parsed[1].params.ud).toBe(1);
     } finally {
       globalThis.WebSocket = originalWs;
     }
+  });
+
+  it('passes client uid to unpackArchive', async () => {
+    const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
+    const driveApi = await import('../../src/web/api/drive');
+    const spy = vi.spyOn(driveApi, 'unpackArchive').mockResolvedValue({
+      tree: [{ text: 'file.txt' }],
+    });
+
+    const client = new ExtractMeClient('s88.extract.me', 'custom_session_uid');
+    const res = await client.unpack({
+      tmp_filename: 's88_temp_123.zip',
+      archive_filename: 'test.zip',
+    });
+
+    expect(spy).toHaveBeenCalledWith({
+      host: 's88.extract.me',
+      tmp_filename: 's88_temp_123.zip',
+      archive_filename: 'test.zip',
+      password: undefined,
+      uid: 'custom_session_uid',
+    });
+    expect(res.tree_data).toEqual([{ text: 'file.txt' }]);
+    spy.mockRestore();
   });
 });

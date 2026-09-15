@@ -201,7 +201,13 @@ export function ExtractArchiveModal({
           return;
         }
 
-        setErrorMessage(unpackResult.error || 'Failed to extract archive contents');
+        const errText =
+          typeof unpackResult.error === 'string'
+            ? unpackResult.error
+            : (unpackResult as any).error_title ||
+              (unpackResult as any).error_desc ||
+              'Failed to extract archive contents';
+        setErrorMessage(errText);
         setModalState('error');
         return;
       }

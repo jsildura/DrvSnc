@@ -207,6 +207,7 @@ export async function unpackArchive(params: {
   tmp_filename: string;
   archive_filename?: string;
   password?: string;
+  uid?: string;
 }): Promise<any> {
   return apiRequest<any>('/api/v1/drive/files/extract-unpack', {
     method: 'POST',

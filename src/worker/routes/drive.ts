@@ -749,8 +749,8 @@ driveRoutes.post('/files/:fileId/extract-init', requireCsrf, async (c) => {
       typeof rawSize === 'number'
         ? rawSize
         : typeof rawSize === 'string'
-        ? parseInt(rawSize, 10) || 0
-        : 0;
+          ? parseInt(rawSize, 10) || 0
+          : 0;
 
     const safeFilename = (metadata.name || 'archive.zip').trim().replace(/[/\\?%*:|"<>]/g, '_');
     const exp = Date.now() + 60 * 60 * 1000; // 1 hour ticket
@@ -867,6 +867,7 @@ driveRoutes.post('/files/extract-unpack', requireCsrf, async (c) => {
     tmp_filename?: string;
     archive_filename?: string;
     password?: string;
+    uid?: string;
   };
 
   try {
@@ -885,7 +886,7 @@ driveRoutes.post('/files/extract-unpack', requireCsrf, async (c) => {
     );
   }
 
-  const { host = DEFAULT_EXTRACT_ME_HOST, tmp_filename, archive_filename, password = '' } = body;
+  const { host = DEFAULT_EXTRACT_ME_HOST, tmp_filename, archive_filename, password = '', uid = '' } = body;
   if (!tmp_filename) {
     return c.json(
       {
@@ -905,18 +906,24 @@ driveRoutes.post('/files/extract-unpack', requireCsrf, async (c) => {
     tmp_filename,
     archive_filename: archive_filename || '',
     password,
+    ...(uid ? { uid } : {}),
   });
+
+  const requestHeaders: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    Origin: 'https://extract.me',
+    Referer: 'https://extract.me/',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
+  if (uid) {
+    requestHeaders.Cookie = `uid=${uid}`;
+  }
 
   try {
     const upstreamRes = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        Origin: 'https://extract.me',
-        Referer: 'https://extract.me/',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
+      headers: requestHeaders,
       body: postParams.toString(),
       signal: AbortSignal.timeout(30000),
     });
