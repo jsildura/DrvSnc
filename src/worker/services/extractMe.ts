@@ -81,18 +81,53 @@ export async function uploadExtractedStreamToDrive(
     throw new Error('Invalid or unapproved download host');
   }
 
-  // Fetch the file from extract.me
-  const upstreamRes = await fetch(downloadUrl, {
-    headers: {
-      Origin: 'https://extract.me',
-      Referer: 'https://extract.me/',
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    },
-  });
+  // Extract uid from URL if present to forward as Cookie
+  const uidMatch = downloadUrl.match(/\/unarchiver\/download_[dt]\/([^/]+)\//);
+  const uid = uidMatch && uidMatch[1] !== 'nouid' ? uidMatch[1] : undefined;
 
-  if (!upstreamRes.ok) {
-    throw new Error(`Failed to fetch extracted file from engine: ${upstreamRes.status} ${upstreamRes.statusText}`);
+  const fetchHeaders: Record<string, string> = {
+    Origin: 'https://extract.me',
+    Referer: 'https://extract.me/',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
+  if (uid) {
+    fetchHeaders.Cookie = `uid=${uid}`;
+  }
+
+  // 1. In extract.me, extraction is lazy. Calling download_t triggers the backend
+  // engine to decompress this individual file from the archive before download_d is available.
+  if (downloadUrl.includes('/download_d/')) {
+    const triggerUrl = downloadUrl.replace('/download_d/', '/download_t/');
+    try {
+      const triggerRes = await fetch(triggerUrl, { headers: fetchHeaders });
+      if (!triggerRes.ok) {
+        console.warn(`[extractMe] Trigger URL returned status ${triggerRes.status}: ${triggerRes.statusText}`);
+      }
+    } catch (err) {
+      console.warn('[extractMe] Error calling trigger URL:', err);
+    }
+  }
+
+  // 2. Fetch the file from extract.me (with retry on 404 in case extraction needs a brief moment to finish writing)
+  let upstreamRes: Response | null = null;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    upstreamRes = await fetch(downloadUrl, { headers: fetchHeaders });
+    if (upstreamRes.ok) {
+      break;
+    }
+    if (upstreamRes.status === 404 && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      continue;
+    }
+    break;
+  }
+
+  if (!upstreamRes || !upstreamRes.ok) {
+    const status = upstreamRes ? upstreamRes.status : 500;
+    const statusText = upstreamRes ? upstreamRes.statusText : 'No Response';
+    throw new Error(`Failed to fetch extracted file from engine: ${status} ${statusText}`);
   }
 
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream';

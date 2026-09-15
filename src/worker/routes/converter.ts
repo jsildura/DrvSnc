@@ -477,6 +477,22 @@ converterRoutes.get('/download', async (c) => {
       ? 'https://online-audio-converter.com'
       : 'https://video-converter.com';
 
+    if (isExtract && fileUrl.includes('/download_d/')) {
+      const triggerUrl = fileUrl.replace('/download_d/', '/download_t/');
+      try {
+        await fetch(triggerUrl, {
+          headers: {
+            ...COMMON_CHROME_HEADERS,
+            Origin: originUrl,
+            Referer: `${originUrl}/`,
+            Cookie: `uid=${uid}`,
+          },
+        });
+      } catch (triggerErr) {
+        console.warn('[converter] Trigger URL error:', triggerErr);
+      }
+    }
+
     const upstream = await fetch(fileUrl, {
       headers: {
         ...COMMON_CHROME_HEADERS,
