@@ -13,11 +13,11 @@
    - Authorized JavaScript Origins:
      - `http://localhost:8787` (Local development)
      - `https://drvsnc-staging.workers.dev` (Staging)
-     - `https://drvsnc.database-00.workers.dev` (Production)
+     - `https://drvsnc.my-files-directory.workers.dev` (Production)
    - Authorized Redirect URIs:
      - `http://localhost:8787/api/auth/google/callback`
      - `https://drvsnc-staging.workers.dev/api/auth/google/callback`
-     - `https://drvsnc.database-00.workers.dev/api/auth/google/callback`
+     - `https://drvsnc.my-files-directory.workers.dev/api/auth/google/callback`
 
 ---
 

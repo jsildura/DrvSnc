@@ -3,10 +3,14 @@
     "AllowedOrigins": [
       "http://localhost:5173",
       "http://localhost:8787",
-      "https://drvsnc.database-00.workers.dev",
+      "https://drvsnc.my-files-directory.workers.dev",
       "https://*.workers.dev"
     ],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedMethods": [
+      "GET",
+      "PUT",
+      "HEAD"
+    ],
     "AllowedHeaders": [
       "Content-Type",
       "Content-Length",
@@ -14,7 +18,9 @@
       "X-Amz-Date",
       "Authorization"
     ],
-    "ExposeHeaders": ["ETag"],
+    "ExposeHeaders": [
+      "ETag"
+    ],
     "MaxAgeSeconds": 3600
   }
 ]
