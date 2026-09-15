@@ -392,6 +392,7 @@ export interface ExtractInitResult {
   mimeType?: string;
   accessToken: string;
   extractMeHost: string;
+  streamUrl?: string;
 }
 
 export const ExtractUploadSchema = z.object({

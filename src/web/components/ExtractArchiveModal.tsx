@@ -142,6 +142,7 @@ export function ExtractArchiveModal({
         accessToken: initData.accessToken,
         fileName: initData.fileName,
         fileSize: initData.fileSize,
+        streamUrl: initData.streamUrl,
         signal: abortController.signal,
         onProgress: (pct) => {
           if (isMountedRef.current && !abortController.signal.aborted) {

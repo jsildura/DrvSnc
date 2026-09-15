@@ -63,6 +63,7 @@ export class ExtractMeClient {
     accessToken: string;
     fileName: string;
     fileSize: number;
+    streamUrl?: string;
     onProgress?: (progressPercent: number) => void;
     signal?: AbortSignal;
   }): ExtractRemoteTask {
@@ -77,7 +78,12 @@ export class ExtractMeClient {
       params.signal.addEventListener('abort', () => abortController.abort());
     }
 
-    if (isLocalDev) {
+    const hasPublicStreamUrl =
+      Boolean(params.streamUrl) &&
+      !params.streamUrl!.includes('localhost') &&
+      !params.streamUrl!.includes('127.0.0.1');
+
+    if (isLocalDev && !hasPublicStreamUrl) {
       const promise = this.uploadArchiveInChunks({
         fileId: params.fileId,
         fileName: params.fileName,
@@ -212,26 +218,37 @@ export class ExtractMeClient {
           // Socket.IO connected
           if (msg.startsWith('40')) {
             const ext = params.fileName.split('.').pop() || '';
-            const payload = {
+            const effectiveRemoteUrl =
+              params.streamUrl &&
+              !params.streamUrl.includes('localhost') &&
+              !params.streamUrl.includes('127.0.0.1')
+                ? params.streamUrl
+                : `gdrive://${params.fileId}`;
+
+            const payload: any = {
               site_id: siteId,
               codebase_id: codebaseId,
               uid: clientUid,
               operation_id: operationId,
               action_type: 'open_remote',
-              remote_url: `gdrive://${params.fileId}`,
+              remote_url: effectiveRemoteUrl,
               original_filename: params.fileName,
-              params: {
+              secondary: false,
+              id3: 1,
+              ff: 1,
+            };
+
+            if (effectiveRemoteUrl.startsWith('gdrive://')) {
+              payload.params = {
                 google_access_token: params.accessToken,
                 original_filename: params.fileName,
                 file_extension: ext,
                 filesize: params.fileSize,
                 gdrive_file_id: params.fileId,
                 secondary: false,
-              },
-              secondary: false,
-              id3: 1,
-              ff: 1,
-            };
+              };
+            }
+
             socket.send(`42["open_remote",${JSON.stringify(payload)}]`);
             return;
           }

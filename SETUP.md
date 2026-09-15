@@ -15,9 +15,9 @@
      - `https://drvsnc-staging.workers.dev` (Staging)
      - `https://drvsnc.my-files-directory.workers.dev` (Production)
    - Authorized Redirect URIs:
-     - `http://localhost:8787/api/auth/google/callback`
-     - `https://drvsnc-staging.workers.dev/api/auth/google/callback`
-     - `https://drvsnc.my-files-directory.workers.dev/api/auth/google/callback`
+     - `http://localhost:8787/api/v1/auth/google/callback`
+     - `https://drvsnc-staging.workers.dev/api/v1/auth/google/callback`
+     - `https://drvsnc.my-files-directory.workers.dev/api/v1/auth/google/callback`
 
 ---
 

@@ -81,4 +81,69 @@ describe('ExtractMeClient web service', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('uses public streamUrl as remote_url in WebSocket open_remote payload', async () => {
+    const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
+    const client = new ExtractMeClient('s88.extract.me', 'uid_test');
+
+    const sentMessages: string[] = [];
+    class MockWebSocket {
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((ev: { data: any }) => void) | null = null;
+      onerror: ((err: any) => void) | null = null;
+      onclose: (() => void) | null = null;
+
+      constructor() {
+        setTimeout(() => {
+          this.onopen?.();
+          this.onmessage?.({ data: '0{"sid":"mock-sid"}' });
+        }, 5);
+      }
+
+      send(data: string) {
+        sentMessages.push(data);
+        if (data === '40') {
+          setTimeout(() => {
+            this.onmessage?.({ data: '40' });
+          }, 5);
+        } else if (data.startsWith('42["open_remote"')) {
+          setTimeout(() => {
+            this.onmessage?.({
+              data: '42["open_remote",{"message_type":"final_result","tmp_filename":"unarc_123"}]',
+            });
+          }, 5);
+        }
+      }
+
+      close() {}
+    }
+
+    const originalWs = globalThis.WebSocket;
+    (globalThis as any).WebSocket = MockWebSocket;
+
+    try {
+      const task = client.openFromDrive({
+        fileId: 'gdrive-file-123',
+        accessToken: 'mock-oauth-token',
+        fileName: 'my-archive.zip',
+        fileSize: 50000000,
+        streamUrl: 'https://drvsnc.workers.dev/api/v1/converter/stream/my-archive.zip?ticket=test-ticket',
+      });
+
+      const res = await task.promise;
+      expect(res.tmp_filename).toBe('unarc_123');
+
+      const openRemoteMsg = sentMessages.find((m) => m.startsWith('42["open_remote"'));
+      expect(openRemoteMsg).toBeDefined();
+      const parsed = JSON.parse(openRemoteMsg!.substring(2));
+      expect(parsed[0]).toBe('open_remote');
+      expect(parsed[1].remote_url).toBe(
+        'https://drvsnc.workers.dev/api/v1/converter/stream/my-archive.zip?ticket=test-ticket'
+      );
+      expect(parsed[1].params).toBeUndefined();
+    } finally {
+      globalThis.WebSocket = originalWs;
+    }
+  });
 });

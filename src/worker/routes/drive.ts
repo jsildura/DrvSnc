@@ -40,6 +40,8 @@ import {
   uploadExtractedStreamToDrive,
   DEFAULT_EXTRACT_ME_HOST,
 } from '../services/extractMe';
+import { signStreamTicket } from '../services/streamTicket';
+
 
 interface ErrorLike {
   code?: string;
@@ -750,6 +752,26 @@ driveRoutes.post('/files/:fileId/extract-init', requireCsrf, async (c) => {
         ? parseInt(rawSize, 10) || 0
         : 0;
 
+    const safeFilename = (metadata.name || 'archive.zip').trim().replace(/[/\\?%*:|"<>]/g, '_');
+    const exp = Date.now() + 60 * 60 * 1000; // 1 hour ticket
+    let streamUrl: string | undefined;
+
+    if (c.env.SESSION_SECRET) {
+      const ticket = await signStreamTicket(c.env.SESSION_SECRET, {
+        fid: metadata.id,
+        uid: user.id,
+        fn: safeFilename,
+        exp,
+      });
+
+      const reqOrigin = new URL(c.req.url).origin;
+      const appOrigin =
+        c.env.APP_ORIGIN && !c.env.APP_ORIGIN.includes('localhost')
+          ? c.env.APP_ORIGIN
+          : reqOrigin;
+      streamUrl = `${appOrigin}/api/v1/converter/stream/${encodeURIComponent(safeFilename)}?ticket=${ticket}`;
+    }
+
     const response: ExtractInitResult = {
       fileId: metadata.id,
       fileName: metadata.name,
@@ -757,6 +779,7 @@ driveRoutes.post('/files/:fileId/extract-init', requireCsrf, async (c) => {
       mimeType: metadata.mimeType,
       accessToken,
       extractMeHost: sEncoder,
+      streamUrl,
     };
 
     return c.json(response);
