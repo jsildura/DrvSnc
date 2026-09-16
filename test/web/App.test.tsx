@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { App } from '../../src/web/App';
 
 describe('Web Client Application Shell (<App />)', () => {
@@ -9,6 +9,10 @@ describe('Web Client Application Shell (<App />)', () => {
     // jsdom shares one `location` across a file, and the app now seeds its active
     // tab from the path — reset so tests don't inherit each other's URL.
     window.history.replaceState({}, '', '/');
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it('renders Google sign-in screen when user is unauthenticated', async () => {
@@ -92,6 +96,23 @@ describe('Web Client Application Shell (<App />)', () => {
     await waitFor(() => {
       expect(screen.getByText('Connected Account')).toBeDefined();
       expect(screen.getByText('Appearance')).toBeDefined();
+    });
+
+    // Click About button in header
+    const aboutBtn = screen.getByRole('button', { name: /About/i });
+    fireEvent.click(aboutBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeDefined();
+      expect(screen.getByRole('heading', { name: 'About' })).toBeDefined();
+    });
+
+    // Close About modal
+    const closeBtn = screen.getByRole('button', { name: /Close/i });
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
     });
   });
 });

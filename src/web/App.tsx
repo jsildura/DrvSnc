@@ -6,10 +6,12 @@ import { DrivePage } from './routes/DrivePage';
 import { ConverterPage } from './routes/ConverterPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { LegalModal, LegalDocType } from './components/LegalModal';
+import { AboutModal } from './components/AboutModal';
 
 function DashboardShell() {
-  const { user, activeTab, setActiveTab, theme, setTheme } = useApp();
+  const { user, activeTab, setActiveTab } = useApp();
   const [showLegalModal, setShowLegalModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const [legalDoc, setLegalDoc] = useState<LegalDocType>('terms');
 
   const navItems: { id: AppTab; label: string; icon: (props: { className?: string }) => JSX.Element }[] = [
@@ -55,7 +57,7 @@ function DashboardShell() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
       {/* Top Navigation Bar */}
-      <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 w-full bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Logo & Brand */}
           <div className="flex items-center gap-3">
@@ -93,20 +95,18 @@ function DashboardShell() {
 
           {/* Right Header Controls: Theme & User Avatar */}
           <div className="flex items-center gap-3">
+            {/* About / Info Button */}
             <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              aria-label="Toggle theme"
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              onClick={() => setShowAboutModal(true)}
+              title="About"
+              aria-label="About"
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             >
-              {theme === 'dark' ? (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                </svg>
-              )}
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+              </svg>
             </button>
 
             {user && (
@@ -176,8 +176,13 @@ function DashboardShell() {
         onClose={() => setShowLegalModal(false)}
       />
 
+      <AboutModal
+        isOpen={showAboutModal}
+        onClose={() => setShowAboutModal(false)}
+      />
+
       {/* Mobile Bottom Navigation Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/65 dark:bg-slate-900/65 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] dark:shadow-[0_-4px_24px_rgba(0,0,0,0.45)] pb-[env(safe-area-inset-bottom,0px)]">
         <div className="grid grid-cols-4 h-16">
           {navItems.map((item) => {
             const Icon = item.icon;

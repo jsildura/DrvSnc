@@ -306,7 +306,7 @@ export function SettingsPage() {
                 <button
                   type="submit"
                   disabled={isSeedrLoggingIn || !seedrEmail.trim() || !seedrPassword.trim()}
-                  className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
+                  className="py-2.5 px-4 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-50 text-accent-contrast text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
                 >
                   <span>{isSeedrLoggingIn ? 'Connecting...' : 'Connect Seedr Account'}</span>
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -317,7 +317,7 @@ export function SettingsPage() {
                   href="https://www.seedr.cc"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[11px] text-indigo-600 dark:text-indigo-400 underline font-medium"
+                  className="text-[11px] text-accent dark:text-accent-textDark underline font-medium"
                 >
                   Register free
                 </a>
@@ -568,12 +568,12 @@ export function SettingsPage() {
           </div>
 
           {saveStatus && (
-            <p className="text-xs font-medium text-indigo-600 dark:text-indigo-400">{saveStatus}</p>
+            <p className="text-xs font-medium text-accent dark:text-accent-textDark">{saveStatus}</p>
           )}
 
           <button
             type="submit"
-            className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium shadow-sm transition-colors"
+            className="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-sm font-medium shadow-sm transition-colors"
           >
             Save Preferences
           </button>

@@ -110,6 +110,21 @@ iframe:-moz-full-screen {
   animation: fadeIn 0.25s ease-out forwards;
 }
 
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-modal-slide-up {
+  animation: modalSlideUp 0.3s ease forwards;
+}
+
 /* Modern Progress Bar Animations */
 @keyframes progress-shimmer {
   0% {

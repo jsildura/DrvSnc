@@ -1292,6 +1292,27 @@ describe('Drive destructive actions (grid view)', () => {
         })
       );
     });
+
+    // Verify move toast with Undo button appears
+    await waitFor(() => {
+      expect(screen.getByText(/Moved "document-to-move.pdf" to Destination Folder/i)).toBeDefined();
+      expect(screen.getByRole('button', { name: /^Undo$/i })).toBeDefined();
+    });
+
+    // Click Undo
+    const undoBtn = screen.getByRole('button', { name: /^Undo$/i });
+    fireEvent.click(undoBtn);
+
+    await waitFor(() => {
+      expect(patchCalledWith).toEqual(
+        expect.objectContaining({
+          addParentFolderId: 'root',
+          removeParentFolderId: 'dest-folder-1',
+        })
+      );
+      expect(screen.getByText('document-to-move.pdf')).toBeDefined();
+      expect(screen.getByText(/Moved "document-to-move.pdf" back to original location/i)).toBeDefined();
+    });
   });
 });
 

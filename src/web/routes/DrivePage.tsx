@@ -27,9 +27,21 @@ import { isArchiveFile } from '../../shared/archiveUtils';
 
 type DriveViewSection = 'files' | 'shared' | 'trash';
 type ViewMode = 'list' | 'grid';
-type Toast = { id: number; message: string; variant: 'success' | 'error' };
+type ToastAction = {
+  label: string;
+  onClick: () => void | Promise<void>;
+};
+
+type Toast = {
+  id: number;
+  message: string;
+  variant: 'success' | 'error';
+  action?: ToastAction;
+  durationMs?: number;
+};
 
 const TOAST_DURATION_MS = 4000;
+const ACTION_TOAST_DURATION_MS = 5500;
 
 const VIDEO_EXTS = /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|3gp|ts|mts|m2ts|vob|ogv|mpg|mpeg)$/i;
 const AUDIO_EXTS = /\.(mp3|wav|m4a|m4r|flac|ogg|oga|opus|mp2|amr|aac|wma|aiff|aif|alac|ape|ac3|dts|mid|midi)$/i;
@@ -220,14 +232,9 @@ export function DrivePage() {
   const [extractingItem, setExtractingItem] = useState<DriveItemView | null>(null);
   const [movingItem, setMovingItem] = useState<DriveItemView | null>(null);
 
-  // Drag-and-drop & touch drag states
+  // Drag-and-drop states (desktop mouse)
   const [draggedItem, setDraggedItem] = useState<DriveItemView | null>(null);
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
-  const [touchDragItem, setTouchDragItem] = useState<DriveItemView | null>(null);
-  const [touchDragCoords, setTouchDragCoords] = useState<{ x: number; y: number } | null>(null);
-  const touchDragItemRef = useRef<DriveItemView | null>(null);
-  const dropTargetFolderIdRef = useRef<string | null>(null);
-  const touchStartPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [activeMenuFileId, setActiveMenuFileId] = useState<string | null>(null);
   const [probedQuality, setProbedQuality] = useState<Record<string, string>>(() => {
@@ -335,6 +342,7 @@ export function DrivePage() {
   }, [items, probedQuality]);
 
   const toastIdRef = useRef(0);
+  const toastTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   // Ids we removed locally (trashed / restored / deleted). Drive's list API is
   // eventually consistent, so a reload that happens shortly after a mutation — a
   // rename or a new folder, say — can still return them. Filter them out until the
@@ -342,16 +350,50 @@ export function DrivePage() {
   const removedIdsRef = useRef<Set<string>>(new Set());
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const currentFolderIdRef = useRef(currentFolderId);
+  currentFolderIdRef.current = currentFolderId;
+
+  useEffect(() => {
+    return () => {
+      for (const timer of toastTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      toastTimersRef.current.clear();
+    };
+  }, []);
 
   const dismissToast = useCallback((id: number) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const showToast = useCallback(
-    (message: string, variant: Toast['variant'] = 'success') => {
+    (
+      message: string,
+      variant: Toast['variant'] = 'success',
+      options?: {
+        action?: ToastAction;
+        durationMs?: number;
+      }
+    ) => {
       const id = ++toastIdRef.current;
-      setToasts((prev) => [...prev, { id, message, variant }]);
-      setTimeout(() => dismissToast(id), TOAST_DURATION_MS);
+      const duration = options?.durationMs ?? TOAST_DURATION_MS;
+      setToasts((prev) => [
+        ...prev,
+        {
+          id,
+          message,
+          variant,
+          action: options?.action,
+          durationMs: duration,
+        },
+      ]);
+      const timer = setTimeout(() => dismissToast(id), duration);
+      toastTimersRef.current.set(id, timer);
     },
     [dismissToast]
   );
@@ -665,6 +707,8 @@ export function DrivePage() {
       const targetId = itemToMove.targetId || itemToMove.id;
       const targetName = itemToMove.name;
       const folderName = destFolderName || 'destination folder';
+      const initialFolderId = currentFolderId;
+      const sourceFolderId = currentFolderId || itemToMove.parents?.[0] || 'root';
 
       const rollback = forgetItem(itemToMove.id, itemsRef.current);
       driveCache.removeCachedItem(itemToMove.id);
@@ -675,7 +719,39 @@ export function DrivePage() {
         if (destFolderId) {
           driveCache.invalidateFolder('files', destFolderId);
         }
-        showToast(`Moved "${targetName}" to ${folderName}`);
+        showToast(
+          `Moved "${targetName}" to ${folderName}`,
+          'success',
+          {
+            durationMs: ACTION_TOAST_DURATION_MS,
+            action: {
+              label: 'Undo',
+              onClick: async () => {
+                try {
+                  await moveItem(targetId, sourceFolderId, destFolderId || '');
+                  driveCache.invalidateFolder(section, currentFolderIdRef.current);
+                  if (destFolderId) {
+                    driveCache.invalidateFolder('files', destFolderId);
+                  }
+                  if (sourceFolderId && sourceFolderId !== 'root') {
+                    driveCache.invalidateFolder('files', sourceFolderId);
+                  }
+                  if ((currentFolderIdRef.current || null) === (initialFolderId || null)) {
+                    removedIdsRef.current.delete(itemToMove.id);
+                    rollback();
+                    driveCache.updateCachedItem(itemToMove);
+                  } else if (currentFolderIdRef.current === destFolderId) {
+                    setItems((prev) => prev.filter((i) => i.id !== itemToMove.id));
+                  }
+                  showToast(`Moved "${targetName}" back to original location`);
+                  refreshStorage();
+                } catch (err) {
+                  reportMutationError(err, 'Failed to undo move');
+                }
+              },
+            },
+          }
+        );
         refreshStorage();
       } catch (err) {
         rollback();
@@ -685,54 +761,7 @@ export function DrivePage() {
     [currentFolderId, forgetItem, reportMutationError, section, showToast]
   );
 
-  const handleTouchStart = useCallback(
-    (item: DriveItemView, e: React.TouchEvent) => {
-      if (section === 'trash') return;
-      const touch = e.touches[0];
-      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
-      touchDragItemRef.current = item;
-    },
-    [section]
-  );
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!touchStartPosRef.current || !touchDragItemRef.current) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - touchStartPosRef.current.x;
-    const dy = touch.clientY - touchStartPosRef.current.y;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist > 12) {
-      if (!touchDragItemRef.current) return;
-      setTouchDragItem(touchDragItemRef.current);
-      setTouchDragCoords({ x: touch.clientX, y: touch.clientY });
-
-      const el = document.elementFromPoint(touch.clientX, touch.clientY);
-      const folderEl = el?.closest('[data-folder-id]');
-      const folderId = folderEl?.getAttribute('data-folder-id');
-
-      if (folderId && folderId !== touchDragItemRef.current.id) {
-        setDropTargetFolderId(folderId);
-        dropTargetFolderIdRef.current = folderId;
-      } else {
-        setDropTargetFolderId(null);
-        dropTargetFolderIdRef.current = null;
-      }
-    }
-  }, []);
-
-  const handleTouchEnd = useCallback(() => {
-    if (touchDragItemRef.current && dropTargetFolderIdRef.current) {
-      const targetFolder = itemsRef.current.find((f) => f.id === dropTargetFolderIdRef.current);
-      handleMoveItem(touchDragItemRef.current, dropTargetFolderIdRef.current, targetFolder?.name);
-    }
-    setTouchDragItem(null);
-    setTouchDragCoords(null);
-    setDropTargetFolderId(null);
-    touchDragItemRef.current = null;
-    dropTargetFolderIdRef.current = null;
-    touchStartPosRef.current = null;
-  }, [handleMoveItem]);
 
   const handleTrash = async (id: string) => {
     const item = items.find((i) => i.id === id);
@@ -1232,15 +1261,10 @@ export function DrivePage() {
                     setDraggedItem(null);
                     setDropTargetFolderId(null);
                   }}
-                  onTouchStart={(e) => handleTouchStart(item, e)}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={handleTouchEnd}
-                  onTouchCancel={handleTouchEnd}
-                  className={`py-3 px-2 flex items-center justify-between rounded-xl transition-all group relative ${
-                    isDropTarget
+                  className={`py-3 px-2 flex items-center justify-between rounded-xl transition-all group relative ${isDropTarget
                       ? 'ring-2 ring-accent bg-accent-light/50 dark:bg-accent-dark/50 scale-[1.01] shadow-md z-20'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                  } ${isMenuOpen ? 'z-30' : 'z-auto'}`}
+                    } ${isMenuOpen ? 'z-30' : 'z-auto'}`}
                 >
                   <div
                     onClick={() => (isFolder ? handleOpenFolder(item) : handlePreviewFile(item))}
@@ -1288,9 +1312,8 @@ export function DrivePage() {
                       }}
                       title="More actions"
                       aria-label="More actions"
-                      className={`p-1 sm:p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${
-                        isMenuOpen ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 ring-2 ring-accent/20' : ''
-                      }`}
+                      className={`p-1 sm:p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${isMenuOpen ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 ring-2 ring-accent/20' : ''
+                        }`}
                     >
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
@@ -1299,13 +1322,11 @@ export function DrivePage() {
 
                     {/* More Actions Dropdown Menu */}
                     <div
-                      className={`absolute right-0 ${
-                        openUpwards ? 'bottom-full mb-1 sm:mb-1.5 origin-bottom-right' : 'top-full mt-1 sm:mt-1.5 origin-top-right'
-                      } w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${
-                        isMenuOpen
+                      className={`absolute right-0 ${openUpwards ? 'bottom-full mb-1 sm:mb-1.5 origin-bottom-right' : 'top-full mt-1 sm:mt-1.5 origin-top-right'
+                        } w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${isMenuOpen
                           ? 'opacity-100 scale-100 pointer-events-auto'
                           : 'opacity-0 scale-95 pointer-events-none'
-                      }`}
+                        }`}
                     >
                       {section !== 'trash' && (
                         <>
@@ -1636,16 +1657,11 @@ export function DrivePage() {
                         setDraggedItem(null);
                         setDropTargetFolderId(null);
                       }}
-                      onTouchStart={(e) => handleTouchStart(folder, e)}
-                      onTouchMove={handleTouchMove}
-                      onTouchEnd={handleTouchEnd}
-                      onTouchCancel={handleTouchEnd}
                       onClick={() => handleOpenFolder(folder)}
-                      className={`p-2 sm:p-3.5 rounded-xl sm:rounded-2xl border transition-all cursor-pointer group flex flex-col justify-between relative ${
-                        isDropTarget
+                      className={`p-2 sm:p-3.5 rounded-xl sm:rounded-2xl border transition-all cursor-pointer group flex flex-col justify-between relative ${isDropTarget
                           ? 'ring-2 ring-accent scale-[1.03] shadow-lg shadow-accent/20 bg-accent-light/50 dark:bg-accent-dark/50 border-accent z-20'
                           : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl hover:bg-white dark:hover:bg-slate-800 hover:border-accent-border shadow-xs hover:shadow-md'
-                      } ${isMenuOpen ? 'z-30' : 'hover:z-10'}`}
+                        } ${isMenuOpen ? 'z-30' : 'hover:z-10'}`}
                     >
                       <div className="flex items-center justify-between gap-1 mb-1 sm:mb-2">
                         <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
@@ -1664,11 +1680,10 @@ export function DrivePage() {
                             }}
                             title="More actions"
                             aria-label="More actions"
-                            className={`p-1 sm:p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${
-                              isMenuOpen
+                            className={`p-1 sm:p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${isMenuOpen
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 ring-2 ring-accent/20'
                                 : ''
-                            }`}
+                              }`}
                           >
                             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
@@ -1677,11 +1692,10 @@ export function DrivePage() {
 
                           {/* More Actions Dropdown Menu */}
                           <div
-                            className={`absolute right-0 top-full mt-1 sm:mt-1.5 w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 origin-top-right max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${
-                              isMenuOpen
+                            className={`absolute right-0 top-full mt-1 sm:mt-1.5 w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 origin-top-right max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${isMenuOpen
                                 ? 'opacity-100 scale-100 pointer-events-auto'
                                 : 'opacity-0 scale-95 pointer-events-none'
-                            }`}
+                              }`}
                           >
                             {section !== 'trash' && (
                               <>
@@ -1902,14 +1916,9 @@ export function DrivePage() {
                         setDraggedItem(null);
                         setDropTargetFolderId(null);
                       }}
-                      onTouchStart={(e) => handleTouchStart(file, e)}
-                      onTouchMove={handleTouchMove}
-                      onTouchEnd={handleTouchEnd}
-                      onTouchCancel={handleTouchEnd}
                       onClick={() => handlePreviewFile(file)}
-                      className={`rounded-xl sm:rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl shadow-xs hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between group cursor-pointer relative ${
-                        activeMenuFileId === file.id ? 'z-30' : 'hover:z-10'
-                      }`}
+                      className={`rounded-xl sm:rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl shadow-xs hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between group cursor-pointer relative ${activeMenuFileId === file.id ? 'z-30' : 'hover:z-10'
+                        }`}
                     >
                       {/* File Preview Banner / Thumbnail */}
                       <div className="relative aspect-video w-full bg-slate-100 dark:bg-slate-800/80 flex items-center justify-center overflow-hidden border-b border-slate-100 dark:border-slate-800 rounded-t-xl sm:rounded-t-2xl">
@@ -1935,9 +1944,8 @@ export function DrivePage() {
                                   setFailedThumbnails((prev) => ({ ...prev, [file.id]: true }));
                                 }
                               }}
-                              className={`w-full h-full object-cover object-center group-hover:scale-105 transition-all duration-300 relative z-[1] ${
-                                loadedThumbnails[file.id] ? 'opacity-100' : 'opacity-0'
-                              }`}
+                              className={`w-full h-full object-cover object-center group-hover:scale-105 transition-all duration-300 relative z-[1] ${loadedThumbnails[file.id] ? 'opacity-100' : 'opacity-0'
+                                }`}
                             />
                           </>
                         ) : (
@@ -2019,8 +2027,8 @@ export function DrivePage() {
                             {/* More Actions Dropdown Menu */}
                             <div
                               className={`absolute right-0 bottom-full mb-1 sm:mb-1.5 w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 origin-bottom-right max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${activeMenuFileId === file.id
-                                  ? 'opacity-100 scale-100 pointer-events-auto'
-                                  : 'opacity-0 scale-95 pointer-events-none'
+                                ? 'opacity-100 scale-100 pointer-events-auto'
+                                : 'opacity-0 scale-95 pointer-events-none'
                                 }`}
                             >
                               {section !== 'trash' && (
@@ -2457,27 +2465,7 @@ export function DrivePage() {
         />
       )}
 
-      {/* Touch Drag Floating Preview Pill */}
-      {touchDragItem && touchDragCoords && (
-        <div
-          className="fixed z-50 pointer-events-none -translate-x-1/2 -translate-y-1/2 flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-accent shadow-2xl ring-2 ring-accent/30 text-xs font-semibold text-slate-800 dark:text-slate-100"
-          style={{ left: touchDragCoords.x, top: touchDragCoords.y }}
-        >
-          <div className="w-6 h-6 rounded-lg bg-accent text-white flex items-center justify-center shrink-0 shadow-xs">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-          </div>
-          <span className="max-w-[140px] truncate">{touchDragItem.name}</span>
-          {dropTargetFolderId ? (
-            <span className="px-1.5 py-0.5 rounded text-[10px] bg-accent text-white font-bold animate-pulse">
-              Drop to Move
-            </span>
-          ) : (
-            <span className="text-[10px] text-slate-400 font-normal">Drag to folder</span>
-          )}
-        </div>
-      )}
+
 
       {/* Action Toasts */}
       {toasts.length > 0 && (
@@ -2487,7 +2475,7 @@ export function DrivePage() {
               key={toast.id}
               role="status"
               aria-live="polite"
-              className={`pointer-events-auto flex items-center gap-2.5 pl-3.5 pr-3 py-2.5 rounded-2xl border shadow-lg backdrop-blur-xl text-xs font-semibold max-w-[min(22rem,calc(100vw-2rem))] ${toast.variant === 'success'
+              className={`pointer-events-auto flex items-center gap-2.5 pl-3.5 pr-2.5 py-2.5 rounded-2xl border shadow-lg backdrop-blur-xl text-xs font-semibold max-w-[min(28rem,calc(100vw-2rem))] ${toast.variant === 'success'
                 ? 'bg-emerald-50/95 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-900/60 text-emerald-700 dark:text-emerald-300'
                 : 'bg-rose-50/95 dark:bg-rose-950/80 border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300'
                 }`}
@@ -2504,12 +2492,31 @@ export function DrivePage() {
                 )}
               </svg>
               <span className="min-w-0 break-words">{toast.message}</span>
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const action = toast.action;
+                    dismissToast(toast.id);
+                    if (action) {
+                      await action.onClick();
+                    }
+                  }}
+                  className={`shrink-0 ml-1 px-2.5 py-1 rounded-lg text-xs font-bold shadow-xs active:scale-95 transition-all cursor-pointer ${toast.variant === 'success'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white dark:bg-emerald-500 dark:hover:bg-emerald-600'
+                      : 'bg-rose-600 hover:bg-rose-700 text-white dark:bg-rose-500 dark:hover:bg-rose-600'
+                    }`}
+                >
+                  {toast.action.label}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => dismissToast(toast.id)}
                 title="Dismiss"
                 aria-label="Dismiss notification"
-                className="shrink-0 p-0.5 rounded-md opacity-60 hover:opacity-100 transition-opacity"
+                className="shrink-0 p-0.5 rounded-md opacity-60 hover:opacity-100 transition-opacity cursor-pointer"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
