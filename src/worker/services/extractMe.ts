@@ -119,10 +119,21 @@ export async function ingestArchiveChunkToExtractMe(
 
   // 1. Read this chunk's bytes from Google Drive (server-side, authenticated).
   const driveRes = await downloadFile(env, userId, fileId, `bytes=${start}-${end}`);
-  if (!driveRes.ok && driveRes.status !== 206) {
+  if (driveRes.status !== 200 && driveRes.status !== 206) {
     throw new Error(`Failed to read archive chunk from Google Drive (status ${driveRes.status})`);
   }
-  const chunkBytes = await driveRes.arrayBuffer();
+
+  let chunkBytes: ArrayBuffer;
+  if (driveRes.status === 200) {
+    const fullBuffer = await driveRes.arrayBuffer();
+    // If upstream returned full content instead of partial range, slice only requested range
+    chunkBytes =
+      fullBuffer.byteLength > chunkSize
+        ? fullBuffer.slice(start, Math.min(start + chunkSize, fullBuffer.byteLength))
+        : fullBuffer;
+  } else {
+    chunkBytes = await driveRes.arrayBuffer();
+  }
 
   // 2. On the first chunk only, allow falling back across known nodes; afterwards the
   // upload is pinned to the node that already holds the earlier chunks.

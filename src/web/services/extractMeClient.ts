@@ -153,20 +153,53 @@ export class ExtractMeClient {
         throw new Error('Upload cancelled');
       }
 
-      const result = await ingestArchiveChunk(
-        {
-          fileId,
-          fileName,
-          fileSize: actualSize,
-          chunkNumber: chunkIdx + 1,
-          chunkSize,
-          totalChunks,
-          identifier,
-          uid: this.uid,
-          host: this.host,
-        },
-        signal
-      );
+      let result: { host?: string; tmpFilename?: string | null } | null = null;
+      let lastErr: unknown = null;
+      const maxRetries = 3;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        if (signal?.aborted) {
+          throw new Error('Upload cancelled');
+        }
+
+        try {
+          result = await ingestArchiveChunk(
+            {
+              fileId,
+              fileName,
+              fileSize: actualSize,
+              chunkNumber: chunkIdx + 1,
+              chunkSize,
+              totalChunks,
+              identifier,
+              uid: this.uid,
+              host: this.host,
+            },
+            signal
+          );
+          break;
+        } catch (err) {
+          lastErr = err;
+          const status = (err as any)?.status;
+          const isTransient =
+            status === 502 ||
+            status === 503 ||
+            status === 504 ||
+            status === 429 ||
+            (err as any)?.name === 'TypeError' ||
+            ((err as any)?.message && /(?:network|fetch|timeout|exceeded)/i.test((err as any).message));
+
+          if (isTransient && attempt < maxRetries && !signal?.aborted) {
+            await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!result) {
+        throw lastErr || new Error('Chunk ingest failed');
+      }
 
       // The worker may have failed over to another node on the first chunk; pin to
       // whichever host accepted it so later chunks, unpack, and downloads all agree.

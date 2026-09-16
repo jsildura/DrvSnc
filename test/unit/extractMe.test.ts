@@ -140,6 +140,47 @@ describe('ExtractMeClient web service', () => {
     }
   });
 
+  it('retries transient 503 errors with backoff in uploadArchiveInChunks', async () => {
+    const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
+    const client = new ExtractMeClient('s88.extract.me', 'uid_retry_test');
+
+    let ingestCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/files/extract-ingest')) {
+        ingestCalls++;
+        if (ingestCalls === 1) {
+          // First attempt fails with 503 Service Unavailable (e.g. Cloudflare Error 1102)
+          return new Response('<!DOCTYPE html><title>Worker exceeded resource limits</title>', {
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: { 'Content-Type': 'text/html' },
+          });
+        }
+        // Second attempt succeeds
+        return new Response(
+          JSON.stringify({ host: 's88.extract.me', tmpFilename: 'unarc_flow_retry_ok' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Not found', { status: 404 });
+    }) as any;
+
+    try {
+      const res = await client.uploadArchiveInChunks({
+        fileId: 'gdrive-file-retry',
+        fileName: 'archive.zip',
+        fileSize: 100,
+      });
+
+      expect(ingestCalls).toBe(2);
+      expect(res.tmp_filename).toBe('unarc_flow_retry_ok');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('passes client uid to unpackArchive', async () => {
     const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
     const driveApi = await import('../../src/web/api/drive');
@@ -235,6 +276,82 @@ describe('ingestArchiveChunkToExtractMe server-side relay', () => {
     } finally {
       downloadSpy.mockRestore();
       fetchSpy.mockRestore();
+    }
+  });
+
+  it('slices buffer to requested byte range when Google Drive returns status 200 instead of 206', async () => {
+    const { ingestArchiveChunkToExtractMe } = await import('../../src/worker/services/extractMe');
+    const driveClient = await import('../../src/worker/services/driveClient');
+
+    // Simulate Google Drive returning status 200 with the full 10-byte file instead of a 206 slice
+    const fullBuffer = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).buffer;
+    const downloadSpy = vi.spyOn(driveClient, 'downloadFile').mockResolvedValue({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => fullBuffer,
+    } as any);
+
+    let relayedBlobSize: number | null = null;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: any, init?: any) => {
+      const formData = init?.body as FormData;
+      const fileBlob = formData?.get('file') as Blob;
+      if (fileBlob) {
+        relayedBlobSize = fileBlob.size;
+      }
+      return new Response(JSON.stringify({ tmp_filename: 's88_temp_xyz.zip', error: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    try {
+      // Request chunk 2 of 4-byte chunks (bytes 4..7)
+      const res = await ingestArchiveChunkToExtractMe({} as any, 'user-123', {
+        fileId: 'gdrive-1',
+        fileName: 'my-archive.zip',
+        fileSize: 10,
+        chunkNumber: 2,
+        chunkSize: 4,
+        totalChunks: 3,
+        identifier: '10-myarchivezip',
+        uid: 'uid_abc',
+        host: 's88.extract.me',
+      });
+
+      expect(res.host).toBe('s88.extract.me');
+      // Sliced exactly 4 bytes (indices 4..7) rather than relaying the full 10 bytes
+      expect(relayedBlobSize).toBe(4);
+    } finally {
+      downloadSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('rejects when Google Drive returns an unhandled HTTP status', async () => {
+    const { ingestArchiveChunkToExtractMe } = await import('../../src/worker/services/extractMe');
+    const driveClient = await import('../../src/worker/services/driveClient');
+
+    const downloadSpy = vi.spyOn(driveClient, 'downloadFile').mockResolvedValue({
+      ok: false,
+      status: 500,
+    } as any);
+
+    try {
+      await expect(
+        ingestArchiveChunkToExtractMe({} as any, 'user-123', {
+          fileId: 'gdrive-1',
+          fileName: 'my-archive.zip',
+          fileSize: 10,
+          chunkNumber: 1,
+          chunkSize: 4,
+          totalChunks: 3,
+          identifier: '10-myarchivezip',
+          uid: 'uid_abc',
+          host: 's88.extract.me',
+        })
+      ).rejects.toThrow(/Failed to read archive chunk from Google Drive/);
+    } finally {
+      downloadSpy.mockRestore();
     }
   });
 

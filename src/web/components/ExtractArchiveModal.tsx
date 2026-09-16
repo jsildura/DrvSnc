@@ -31,6 +31,20 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
+function sanitizeExtractionErrorMessage(err: unknown, fallback: string): string {
+  const raw = (err as Error)?.message || fallback;
+  if (
+    raw.includes('<!DOCTYPE html>') ||
+    raw.includes('<html') ||
+    raw.includes('Worker exceeded resource limits') ||
+    raw.includes('Error 1102') ||
+    raw.includes('503')
+  ) {
+    return 'Extraction service exceeded worker resource limits (503). The server was temporarily busy or recycling — please retry in a few moments.';
+  }
+  return raw;
+}
+
 export function ExtractArchiveModal({
   isOpen,
   item,
@@ -166,7 +180,7 @@ export function ExtractArchiveModal({
       await executeUnpack(client, remoteResult.tmp_filename, remoteResult.archive_filename);
     } catch (err) {
       if (!isMountedRef.current) return;
-      setErrorMessage((err as Error).message || 'Failed to start archive extraction');
+      setErrorMessage(sanitizeExtractionErrorMessage(err, 'Failed to start archive extraction'));
       setModalState('error');
     }
   }, [item]);
@@ -232,7 +246,7 @@ export function ExtractArchiveModal({
       setModalState('tree_view');
     } catch (err) {
       if (!isMountedRef.current) return;
-      setErrorMessage((err as Error).message || 'Failed to extract archive contents');
+      setErrorMessage(sanitizeExtractionErrorMessage(err, 'Failed to extract archive contents'));
       setModalState('error');
     }
   };
@@ -405,7 +419,7 @@ export function ExtractArchiveModal({
       setModalState('complete');
     } catch (err) {
       if (!isMountedRef.current) return;
-      setErrorMessage((err as Error).message || 'Failed to save extracted files to Google Drive');
+      setErrorMessage(sanitizeExtractionErrorMessage(err, 'Failed to save extracted files to Google Drive'));
       setModalState('error');
     }
   };
