@@ -4,6 +4,7 @@ import { requireSession, AuthenticatedSession } from '../middleware/session';
 import { requireCsrf } from '../middleware/csrf';
 import {
   AccountView,
+  DriveItemView,
   CreateFolderSchema,
   UpdateDriveItemSchema,
   AddPermissionSchema,
@@ -65,13 +66,16 @@ interface ErrorLike {
 async function resolveExportMimeType(
   env: Env,
   userId: string,
-  fileId: string
+  fileId: string,
+  existingMeta?: DriveItemView | null
 ): Promise<{ preferred: string; fallbacks: string[] } | null> {
-  let mimeType: string | undefined;
-  try {
-    mimeType = (await getFileMetadata(env, userId, fileId)).mimeType;
-  } catch {
-    return null;
+  let mimeType = existingMeta?.mimeType;
+  if (!mimeType) {
+    try {
+      mimeType = (await getFileMetadata(env, userId, fileId)).mimeType;
+    } catch {
+      return null;
+    }
   }
   if (!mimeType) return null;
 
@@ -363,10 +367,17 @@ driveRoutes.patch('/items/:fileId', requireCsrf, async (c) => {
   }
 
   try {
+    const addParents =
+      parsed.data.addParentFolderId ||
+      (Array.isArray(parsed.data.addParents) ? parsed.data.addParents.join(',') : parsed.data.addParents);
+    const removeParents =
+      parsed.data.removeParentFolderId ||
+      (Array.isArray(parsed.data.removeParents) ? parsed.data.removeParents.join(',') : parsed.data.removeParents);
+
     const item = await updateItem(c.env, user.id, fileId, {
       name: parsed.data.name,
-      addParents: parsed.data.addParentFolderId,
-      removeParents: parsed.data.removeParentFolderId,
+      addParents,
+      removeParents,
     });
     return c.json(item);
   } catch (err) {
@@ -512,16 +523,22 @@ driveRoutes.on(['GET', 'HEAD'], '/files/:fileId/download', async (c) => {
         const status = (dlErr as ErrorLike).status;
         if (status !== 403 && status !== 400) throw dlErr;
 
-        const exportMime = await resolveExportMimeType(c.env, user.id, fileId);
-        if (!exportMime) throw dlErr;
+        // Check if the item is a shortcut pointing to another file
+        const meta = await getFileMetadata(c.env, user.id, fileId).catch(() => null);
+        if (meta?.isShortcut && meta.targetId) {
+          upstreamRes = await downloadFile(c.env, user.id, meta.targetId, clientRange);
+        } else {
+          const exportMime = await resolveExportMimeType(c.env, user.id, fileId, meta);
+          if (!exportMime) throw dlErr;
 
-        upstreamRes = await exportFile(
-          c.env,
-          user.id,
-          fileId,
-          exportMime.preferred,
-          exportMime.fallbacks
-        );
+          upstreamRes = await exportFile(
+            c.env,
+            user.id,
+            fileId,
+            exportMime.preferred,
+            exportMime.fallbacks
+          );
+        }
       }
     }
 

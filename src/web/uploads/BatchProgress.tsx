@@ -170,13 +170,21 @@ export function BatchProgress({ batch, onRefresh }: BatchProgressProps) {
           <span>
             {batch.completedCount} completed • {batch.activeCount} active • {batch.failedCount + batch.canceledCount} failed
           </span>
-          <span className="font-semibold text-indigo-600 dark:text-indigo-400">{percent}%</span>
+          <span className="font-semibold tabular-nums text-accent dark:text-accent-textDark">{percent}%</span>
         </div>
-        <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+        <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden ring-1 ring-inset ring-slate-900/5 dark:ring-white/5 relative">
           <div
-            className="h-full bg-gradient-to-r from-indigo-500 to-blue-600 rounded-full transition-all duration-500"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="h-full bg-gradient-to-r from-accent via-accent-hover to-accent rounded-full transition-[width] duration-500 ease-out relative overflow-hidden shadow-xs shadow-accent/25"
             style={{ width: `${percent}%` }}
-          />
+          >
+            {percent > 0 && percent < 100 && (
+              <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/35 dark:via-white/20 to-transparent -translate-x-full animate-shimmer pointer-events-none" />
+            )}
+          </div>
         </div>
       </div>
 

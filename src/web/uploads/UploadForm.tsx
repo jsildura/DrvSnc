@@ -30,11 +30,12 @@ export function UploadForm({
   const [activeMode, setActiveMode] = useState<'local' | 'remote' | 'batch' | 'magnet'>('local');
 
   // Local upload state
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [localFolderId, setLocalFolderId] = useState<string | undefined>(undefined);
   const [localFolderName, setLocalFolderName] = useState('My Drive (Root)');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,54 +59,80 @@ export function UploadForm({
   const relayAvailable = !remoteIsPlaylist;
   const relayActive = useBrowserFetch && relayAvailable;
 
-  const handleFileChange = (file: File | null) => {
+  const handleFilesAdded = (incoming: FileList | File[] | null) => {
     setLocalError(null);
-    if (!file) {
-      setSelectedFile(null);
-      return;
+    if (!incoming || incoming.length === 0) return;
+
+    const filesArray = Array.from(incoming);
+    const oversized = filesArray.filter((f) => f.size > MAX_FILE_SIZE);
+    if (oversized.length > 0) {
+      setLocalError(
+        `${oversized.length} file(s) exceed the 5 GiB maximum limit (${oversized.map((f) => f.name).slice(0, 2).join(', ')}${oversized.length > 2 ? '...' : ''})`
+      );
     }
-    if (file.size > MAX_FILE_SIZE) {
-      setLocalError('File size exceeds the 5 GiB maximum limit');
-      setSelectedFile(null);
-      return;
+
+    const validFiles = filesArray.filter((f) => f.size <= MAX_FILE_SIZE);
+    if (validFiles.length > 0) {
+      setSelectedFiles((prev) => {
+        const existingNames = new Set(prev.map((f) => `${f.name}-${f.size}`));
+        const newOnes = validFiles.filter((f) => !existingNames.has(`${f.name}-${f.size}`));
+        return [...prev, ...newOnes];
+      });
     }
-    setSelectedFile(file);
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleLocalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || isUploading) return;
+    if (selectedFiles.length === 0 || isUploading) return;
 
-    try {
+    const filesToUpload = [...selectedFiles];
+    const targetFolderId = localFolderId || undefined;
+
+    // Immediately clear form state so the UI hands off tracking entirely to Active Transfers
+    setSelectedFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setLocalError(null);
+
+    // Process uploads in background while reporting live progress to Active Transfers
+    void (async () => {
       setIsUploading(true);
-      setLocalError(null);
-      setUploadProgress(0);
+      try {
+        for (let i = 0; i < filesToUpload.length; i++) {
+          const file = filesToUpload[i];
 
-      const initRes = await initiateLocalUploadJob({
-        filename: selectedFile.name,
-        fileSize: selectedFile.size,
-        mimeType: selectedFile.type || 'application/octet-stream',
-        folderId: localFolderId || undefined,
-      });
+          const initRes = await initiateLocalUploadJob({
+            filename: file.name,
+            fileSize: file.size,
+            mimeType: file.type || 'application/octet-stream',
+            folderId: targetFolderId,
+          });
 
-      const parts = await uploadFileMultipart(selectedFile, {
-        partSize: initRes.partSize,
-        partCount: initRes.partCount,
-        getPartUrls: (from, count) => getSignPartUrls(initRes.job.id, from, count).then((r) => r.parts),
-        onProgress: (loaded, total) => {
-          setUploadProgress(Math.round((loaded / total) * 100));
-        },
-      });
+          // Refresh active transfers list so the job shows up immediately
+          onJobCreated();
 
-      await completeLocalUploadJob(initRes.job.id, parts);
-      setSelectedFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      onJobCreated();
-    } catch (err) {
-      setLocalError((err as Error).message || 'Failed to complete local upload');
-    } finally {
-      setIsUploading(false);
-    }
+          const parts = await uploadFileMultipart(file, {
+            partSize: initRes.partSize,
+            partCount: initRes.partCount,
+            getPartUrls: (from, count) => getSignPartUrls(initRes.job.id, from, count).then((r) => r.parts),
+            onProgress: (loaded, total) => {
+              relay.trackLocalProgress?.(initRes.job.id, loaded, total);
+            },
+          });
+
+          await completeLocalUploadJob(initRes.job.id, parts);
+          relay.clearLocalProgress?.(initRes.job.id);
+          onJobCreated();
+        }
+      } catch (err) {
+        setLocalError((err as Error).message || 'Failed to complete local upload');
+      } finally {
+        setIsUploading(false);
+      }
+    })();
   };
 
   const handleRemoteSubmit = async (e: React.FormEvent) => {
@@ -226,49 +253,116 @@ export function UploadForm({
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              if (e.dataTransfer.files[0]) handleFileChange(e.dataTransfer.files[0]);
+              if (e.dataTransfer.files.length > 0) handleFilesAdded(e.dataTransfer.files);
             }}
-            className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-400 rounded-2xl p-8 text-center cursor-pointer transition-all hover:bg-blue-50/20 dark:hover:bg-blue-950/20"
+            className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-accent dark:hover:border-accent-hover rounded-2xl p-8 text-center cursor-pointer transition-all hover:bg-accent/5 dark:hover:bg-accent/10"
           >
             <input
               ref={fileInputRef}
               type="file"
-              onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+              multiple
+              onChange={(e) => {
+                if (e.target.files) handleFilesAdded(e.target.files);
+              }}
               className="hidden"
             />
-            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <div className="w-12 h-12 rounded-2xl bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
             </div>
             <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-              Click or drag file to stage for upload
+              Click or drag files to upload
             </p>
-            <p className="text-xs text-slate-400 mt-1">Supports files up to 5 GiB</p>
+            <p className="text-xs text-slate-400 mt-1">Supports multiple files up to 5 GiB each</p>
           </div>
 
-          {selectedFile && (
-            <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 rounded-xl flex items-center justify-between">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{selectedFile.name}</p>
-                  <p className="text-[10px] text-slate-400 font-mono">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MiB</p>
+          {selectedFiles.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                  Files ({selectedFiles.length})
+                </span>
+                <div className="flex items-center gap-2">
+                  <span>
+                    {(selectedFiles.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1)} MiB total
+                  </span>
+                  {!isUploading && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFiles([]);
+                        if (fileInputRef.current) fileInputRef.current.value = '';
+                      }}
+                      className="text-rose-500 hover:text-rose-600 font-medium hover:underline ml-1"
+                    >
+                      Clear all
+                    </button>
+                  )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedFile(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+
+              <div className="max-h-48 overflow-y-auto space-y-1.5 p-1 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/40 dark:bg-slate-900/40">
+                {selectedFiles.map((file, idx) => {
+                  const isCurrent = isUploading && currentFileIndex === idx;
+                  const isDone = isUploading && idx < currentFileIndex;
+                  return (
+                    <div
+                      key={`${file.name}-${file.size}-${idx}`}
+                      className={`p-2.5 rounded-xl border flex items-center justify-between transition-all ${
+                        isCurrent
+                          ? 'bg-accent-light dark:bg-accent-dark border-accent text-accent-contrast'
+                          : isDone
+                            ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60'
+                            : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/80 dark:border-slate-700/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+                        <div
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                            isDone
+                              ? 'bg-emerald-500 text-white'
+                              : isCurrent
+                                ? 'bg-accent text-accent-contrast'
+                                : 'bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark'
+                          }`}
+                        >
+                          {isDone ? (
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{file.name}</p>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {(file.size / (1024 * 1024)).toFixed(2)} MiB
+                            {isCurrent && ` • Uploading ${uploadProgress}%`}
+                            {isDone && ' • Uploaded'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {!isUploading && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFile(idx)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors shrink-0 ml-2"
+                          title="Remove file"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -286,27 +380,16 @@ export function UploadForm({
             <p className="text-xs text-rose-500 font-medium">{localError}</p>
           )}
 
-          {isUploading && (
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-                <span>Staging upload...</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
           <button
             type="submit"
-            disabled={!selectedFile || isUploading}
-            className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium shadow-md shadow-blue-500/20 transition-colors"
+            disabled={selectedFiles.length === 0 || isUploading}
+            className="w-full py-3 px-4 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-50 text-accent-contrast font-medium shadow-md shadow-accent/20 transition-colors"
           >
-            {isUploading ? 'Staging...' : 'Stage File for Upload'}
+            {isUploading
+              ? 'Starting Upload...'
+              : selectedFiles.length > 1
+                ? `Upload ${selectedFiles.length} Files`
+                : 'Upload File'}
           </button>
         </form>
       )}
@@ -435,7 +518,7 @@ export function UploadForm({
           <button
             type="submit"
             disabled={!remoteUrl.trim() || isSubmittingRemote}
-            className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium shadow-md shadow-indigo-500/20 transition-colors"
+            className="w-full py-3 px-4 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-50 text-accent-contrast font-medium shadow-md shadow-accent/20 transition-colors"
           >
             {isSubmittingRemote
               ? relayActive

@@ -1191,5 +1191,107 @@ describe('Drive destructive actions (grid view)', () => {
       expect(screen.getByText('Alpha Project')).toBeDefined();
     });
   });
+
+  it('opens Move modal from actions menu and moves item to selected folder', async () => {
+    const mockItems = [
+      {
+        id: 'file-move-1',
+        name: 'document-to-move.pdf',
+        mimeType: 'application/pdf',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 1024,
+      },
+    ];
+
+    const mockFolders = [
+      {
+        id: 'dest-folder-1',
+        name: 'Destination Folder',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: false,
+        trashed: false,
+      },
+    ];
+
+    let patchCalledWith: any = null;
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({
+            usage: 1000,
+            limit: 5000,
+            usageInDrive: 1000,
+            usageInDriveTrash: 0,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/items/file-move-1') && init?.method === 'PATCH') {
+        patchCalledWith = JSON.parse(init.body as string);
+        return new Response(
+          JSON.stringify({ ...mockItems[0], parents: ['dest-folder-1'] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/folders')) {
+        return new Response(
+          JSON.stringify({ items: mockFolders, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(
+          JSON.stringify({ items: mockItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response('{}', { status: 200 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('document-to-move.pdf')).toBeDefined();
+    });
+
+    // Open More actions menu
+    const moreBtn = screen.getByRole('button', { name: /More actions/i });
+    fireEvent.click(moreBtn);
+
+    // Click "Move"
+    const moveActionBtn = screen.getByRole('button', { name: /^Move$/i });
+    fireEvent.click(moveActionBtn);
+
+    // Modal should be open
+    await waitFor(() => {
+      expect(screen.getByText('Destination Folder')).toBeDefined();
+    });
+
+    // Select Destination Folder
+    fireEvent.click(screen.getByText('Destination Folder'));
+
+    // Click Move to Destination Folder
+    const confirmBtn = screen.getByRole('button', { name: /Move to Destination Folder/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(patchCalledWith).toEqual(
+        expect.objectContaining({
+          addParentFolderId: 'dest-folder-1',
+          addParents: ['dest-folder-1'],
+        })
+      );
+    });
+  });
 });
 

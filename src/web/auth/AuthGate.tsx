@@ -7,6 +7,7 @@ import {
   RememberedAccount,
 } from './rememberedAccounts';
 import { LegalModal, LegalDocType } from '../components/LegalModal';
+import { StartupLoadingScreen } from '../components/StartupLoadingScreen';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useApp();
@@ -31,19 +32,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     setRemembered(updated);
   };
 
-  if (isLoading) {
+  const [hasCompletedStartup, setHasCompletedStartup] = useState(false);
+
+  if (!hasCompletedStartup) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4">
-        <div className="flex flex-col items-center gap-4 animate-pulse">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-500/20 flex items-center justify-center">
-            <svg className="w-8 h-8 text-indigo-600 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-            </svg>
-          </div>
-          <div className="h-4 w-32 bg-slate-200 dark:bg-slate-800 rounded-full" />
-        </div>
-      </div>
+      <StartupLoadingScreen
+        isSessionLoading={isLoading}
+        user={user}
+        onComplete={() => setHasCompletedStartup(true)}
+      />
     );
   }
 
@@ -156,7 +153,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 setLegalDoc('terms');
                 setShowLegalModal(true);
               }}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             >
               Terms of Service
             </button>
@@ -167,7 +164,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 setLegalDoc('privacy');
                 setShowLegalModal(true);
               }}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             >
               Privacy Policy
             </button>

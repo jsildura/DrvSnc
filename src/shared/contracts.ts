@@ -298,6 +298,7 @@ export const DriveItemViewSchema = z.object({
   targetId: z.string().nullable().optional(),
   targetMimeType: z.string().nullable().optional(),
   isShortcut: z.boolean().optional(),
+  canDownload: z.boolean().optional(),
   owners: z.array(DriveItemOwnerSchema).optional(),
   parents: z.array(z.string()).optional(),
   videoMediaMetadata: VideoMediaMetadataSchema.optional(),
@@ -357,6 +358,8 @@ export const UpdateDriveItemSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   addParentFolderId: z.string().max(128).optional(),
   removeParentFolderId: z.string().max(128).optional(),
+  addParents: z.array(z.string()).or(z.string()).optional(),
+  removeParents: z.array(z.string()).or(z.string()).optional(),
 });
 
 export type UpdateDriveItemRequest = z.infer<typeof UpdateDriveItemSchema>;

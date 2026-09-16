@@ -181,7 +181,7 @@ export function LegalModal({ isOpen, onClose, initialDoc = 'terms' }: LegalModal
                     href="https://developers.google.com/terms/api-services-user-data-policy"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-500"
+                    className="text-accent dark:text-accent-textDark underline hover:opacity-80"
                   >
                     Google API Services User Data Policy
                   </a>
@@ -196,7 +196,7 @@ export function LegalModal({ isOpen, onClose, initialDoc = 'terms' }: LegalModal
         <div className="flex items-center justify-end px-6 py-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition-colors"
+            className="px-5 py-2 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-xs font-semibold shadow-sm transition-colors"
           >
             I Understand
           </button>

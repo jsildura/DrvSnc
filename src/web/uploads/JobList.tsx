@@ -148,13 +148,13 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
     switch (status) {
       case 'uploading':
       case 'fetching':
+      case 'staging':
         return (
-          <span className={`${base} bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300`}>
+          <span className={`${base} bg-accent-light dark:bg-accent-dark text-accent-text dark:text-accent-textDark`}>
             {status}
           </span>
         );
       case 'queued':
-      case 'staging':
         return (
           <span className={`${base} bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300`}>
             {status}
@@ -176,7 +176,7 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
       case 'cancel_requested':
         return (
           <span className={`${base} bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400`}>
-            Canceled
+            {status === 'cancel_requested' ? 'Canceling...' : 'Canceled'}
           </span>
         );
       default:
@@ -197,10 +197,13 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
               // A staging relay's progress only exists in this tab — the worker sees nothing until
               // the parts are assembled — so it is reported separately from `progressBytes`.
               const staging = relay.relayProgress[job.id];
+              const isStaging = !!staging || job.status === 'staging';
               const transferred = staging ? staging.stagedBytes : job.progressBytes;
               const total = staging && staging.totalBytes > 0 ? staging.totalBytes : job.fileSize;
               const progressPct =
                 total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : 0;
+              const displayStatus = staging ? 'staging' : job.status;
+              const isCanceling = job.status === 'cancel_requested';
               const sourceLabel =
                 job.sourceKind === 'remote'
                   ? 'Remote Download'
@@ -223,7 +226,7 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-                      {getStatusBadge(job.status)}
+                      {getStatusBadge(displayStatus)}
                       <button
                         type="button"
                         disabled={pendingIds.has(job.id)}
@@ -240,19 +243,58 @@ export function JobList({ jobs, onRefresh, relay }: JobListProps) {
                     </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <div className="flex justify-between gap-2 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                      <span className="truncate">
-                        {(transferred / (1024 * 1024)).toFixed(2)} MiB{' '}
-                        {staging ? 'staged from your browser' : 'transferred'}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+                      <span className="flex items-center gap-1.5 min-w-0 truncate">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            isCanceling
+                              ? 'bg-slate-400'
+                              : 'bg-accent animate-pulse'
+                          }`}
+                        />
+                        <span className="truncate">
+                          <span className="font-medium text-slate-700 dark:text-slate-200">
+                            {(transferred / (1024 * 1024)).toFixed(2)} MiB
+                          </span>{' '}
+                          <span className="text-slate-400 dark:text-slate-500">
+                            {isCanceling
+                              ? 'canceling...'
+                              : isStaging
+                                ? 'staged from your browser'
+                                : 'transferred'}
+                          </span>
+                        </span>
                       </span>
-                      <span className="shrink-0">{total > 0 ? `${progressPct}%` : '—'}</span>
+                      <span className="shrink-0 font-semibold tabular-nums text-slate-700 dark:text-slate-300">
+                        {total > 0 ? `${progressPct}%` : '—'}
+                      </span>
                     </div>
-                    <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="bg-blue-600 h-1.5 transition-all duration-300"
-                        style={{ width: `${progressPct}%` }}
-                      />
+                    <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden ring-1 ring-inset ring-slate-900/5 dark:ring-white/5 relative">
+                      {total <= 0 ? (
+                        <div
+                          className="animate-indeterminate h-full bg-gradient-to-r from-accent to-accent-hover"
+                        />
+                      ) : (
+                        <div
+                          role="progressbar"
+                          aria-valuenow={progressPct}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label={isStaging ? 'Staging progress' : 'Upload progress'}
+                          className={`h-full rounded-full relative overflow-hidden transition-[width] duration-500 ease-out ${
+                            isCanceling
+                              ? 'bg-slate-400 dark:bg-slate-600 opacity-60'
+                              : 'bg-gradient-to-r from-accent via-accent-hover to-accent shadow-xs shadow-accent/25'
+                          }`}
+                          style={{ width: `${progressPct}%` }}
+                        >
+                          {/* Ambient light sheen reflection across active progress */}
+                          {!isCanceling && progressPct > 0 && (
+                            <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/35 dark:via-white/20 to-transparent -translate-x-full animate-shimmer pointer-events-none" />
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 

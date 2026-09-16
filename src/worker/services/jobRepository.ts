@@ -2,7 +2,7 @@ import { Env } from '../env';
 import { encryptSecret } from './crypto';
 import { redactSourceUrl } from './remoteUrlPolicy';
 import { deriveRemoteFilename } from './remoteFilename';
-import { abortMultipartUpload } from './r2Multipart';
+import { abortMultipartUpload, deleteR2Object } from './r2Multipart';
 import {
   UploadJobView,
   CreateRemoteJobRequest,
@@ -408,8 +408,19 @@ export async function requestCancel(
     return normalizeJobRow(row);
   }
 
-  const targetStatus: UploadJobStatus =
-    currentStatus === 'staging' ? 'canceled' : 'cancel_requested';
+  // Attempt to terminate running workflow instance immediately if present
+  if (env.DRIVE_TRANSFER) {
+    try {
+      const instance = await env.DRIVE_TRANSFER.get(jobId);
+      if (instance) {
+        await instance.terminate();
+      }
+    } catch (_err) {
+      // Ignore if workflow instance doesn't exist, already completed, or in test environment
+    }
+  }
+
+  const targetStatus: UploadJobStatus = 'canceled';
 
   if (!canTransition(currentStatus, targetStatus)) {
     return normalizeJobRow(row);
@@ -419,10 +430,10 @@ export async function requestCancel(
   const updateRes = await env.DB.prepare(
     `UPDATE upload_jobs
      SET status = ?, updated_at = ?, version = version + 1
-     WHERE id = ? AND user_id = ? AND version = ?
+     WHERE id = ? AND user_id = ? AND status NOT IN ('completed', 'failed', 'canceled')
      RETURNING *`
   )
-    .bind(targetStatus, now, jobId, userId, Number(row.version))
+    .bind(targetStatus, now, jobId, userId)
     .first<Record<string, unknown>>();
 
   if (targetStatus === 'canceled') {
@@ -434,17 +445,18 @@ export async function requestCancel(
       .bind(now, jobId)
       .run();
 
-    // A canceled staging job leaves a multipart upload half-written. R2 keeps those parts billable
-    // until the upload is explicitly abandoned, and a browser relay hits this path routinely — the
-    // source can refuse the fetch or the tab can close mid-stream.
+    // A canceled job leaves a multipart upload or staged object. Clean up R2 completely.
     const uploadId = row.r2_upload_id ? String(row.r2_upload_id) : null;
     const objectKey = row.r2_object_key ? String(row.r2_object_key) : null;
     if (uploadId && objectKey) {
       await abortMultipartUpload(env, objectKey, uploadId);
     }
+    if (objectKey) {
+      await deleteR2Object(env, objectKey);
+    }
   }
 
-  return normalizeJobRow(updateRes || row);
+  return normalizeJobRow(updateRes || { ...row, status: targetStatus, updated_at: now });
 }
 
 export async function retryJob(

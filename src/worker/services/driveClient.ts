@@ -132,6 +132,10 @@ export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView 
     targetId,
     targetMimeType,
     isShortcut,
+    canDownload:
+      typeof (raw.capabilities as Record<string, unknown> | undefined)?.canDownload === 'boolean'
+        ? ((raw.capabilities as Record<string, unknown>).canDownload as boolean)
+        : undefined,
     owners,
     parents: Array.isArray(raw.parents) ? (raw.parents as string[]) : undefined,
     videoMediaMetadata: raw.videoMediaMetadata
@@ -270,7 +274,7 @@ export async function withDriveAuth<T>(
 }
 
 const DRIVE_FILE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata,shortcutDetails(targetId,targetMimeType)';
+  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata,shortcutDetails(targetId,targetMimeType),capabilities(canDownload)';
 
 export async function listItems(
   env: Env,
@@ -685,6 +689,8 @@ export async function updateItem(
   return withDriveAuth(env, userId, async (token) => {
     const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`);
     url.searchParams.set('fields', DRIVE_FILE_FIELDS);
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('enforceSingleParent', 'true');
     if (updates.addParents) url.searchParams.set('addParents', updates.addParents);
     if (updates.removeParents) url.searchParams.set('removeParents', updates.removeParents);
 
@@ -992,10 +998,12 @@ export async function downloadFile(
     if (range) {
       headers.Range = range;
     }
-    const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
-      { headers }
-    );
+    const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`);
+    url.searchParams.set('alt', 'media');
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('acknowledgeAbuse', 'true');
+
+    const res = await fetch(url.toString(), { headers });
 
     if (!res.ok && res.status !== 206) {
       const mapped = mapDriveError(res.status);

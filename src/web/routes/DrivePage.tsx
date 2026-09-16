@@ -10,6 +10,7 @@ import {
   getDriveStorage,
   createFolder,
   renameItem,
+  moveItem,
   trashItem,
   restoreItem,
   deleteItemPermanently,
@@ -19,6 +20,7 @@ import {
 import FilePreview from '../../components/FilePreview';
 import ShareModal from '../components/ShareModal';
 import { ExtractArchiveModal } from '../components/ExtractArchiveModal';
+import { MoveItemModal } from '../components/MoveItemModal';
 import { driveCache } from '../services/driveCache';
 import { isArchiveFile } from '../../shared/archiveUtils';
 
@@ -135,6 +137,8 @@ function formatStorageLimit(bytes?: number | null): string {
   return `${formatted} ${sizes[i] || 'GB'}`;
 }
 
+const probedVideoQualityCache = new Map<string, string | null>();
+
 export function DrivePage() {
   const app = useOptionalApp();
   const setActiveTab =
@@ -214,9 +218,25 @@ export function DrivePage() {
   const [previewIndex, setPreviewIndex] = useState<number>(0);
   const [sharingItem, setSharingItem] = useState<DriveItemView | null>(null);
   const [extractingItem, setExtractingItem] = useState<DriveItemView | null>(null);
+  const [movingItem, setMovingItem] = useState<DriveItemView | null>(null);
+
+  // Drag-and-drop & touch drag states
+  const [draggedItem, setDraggedItem] = useState<DriveItemView | null>(null);
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
+  const [touchDragItem, setTouchDragItem] = useState<DriveItemView | null>(null);
+  const [touchDragCoords, setTouchDragCoords] = useState<{ x: number; y: number } | null>(null);
+  const touchDragItemRef = useRef<DriveItemView | null>(null);
+  const dropTargetFolderIdRef = useRef<string | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [activeMenuFileId, setActiveMenuFileId] = useState<string | null>(null);
-  const [probedQuality, setProbedQuality] = useState<Record<string, string>>({});
+  const [probedQuality, setProbedQuality] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const [id, quality] of probedVideoQualityCache.entries()) {
+      if (quality) initial[id] = quality;
+    }
+    return initial;
+  });
   const probingRef = useRef<Record<string, boolean>>({});
 
   const handleCopyItemLink = async (item: DriveItemView) => {
@@ -241,7 +261,7 @@ export function DrivePage() {
       if (file.videoQuality) return file.videoQuality;
       const detected = detectVideoQuality(file.videoMediaMetadata, file.name);
       if (detected) return detected;
-      return probedQuality[file.id] || null;
+      return probedQuality[file.id] || probedVideoQualityCache.get(file.id) || null;
     },
     [probedQuality]
   );
@@ -252,31 +272,64 @@ export function DrivePage() {
     const candidates = items.filter(
       (f) =>
         isConvertibleVideo(f) &&
+        f.canDownload !== false &&
         !f.videoQuality &&
         !detectVideoQuality(f.videoMediaMetadata, f.name) &&
         !probedQuality[f.id] &&
-        !probingRef.current[f.id]
+        !probingRef.current[f.id] &&
+        !probedVideoQualityCache.has(f.id)
     );
     if (candidates.length === 0) return;
 
     for (const f of candidates) {
-      probingRef.current[f.id] = true;
+      const fileId = f.id;
+      probingRef.current[fileId] = true;
       try {
         const v = document.createElement('video');
         v.preload = 'metadata';
-        v.src = getDownloadUrl(f.id);
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const cleanup = () => {
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          v.onloadedmetadata = null;
+          v.onerror = null;
+          v.removeAttribute('src');
+          v.load();
+        };
+
+        timer = setTimeout(() => {
+          if (!probedVideoQualityCache.has(fileId)) {
+            probedVideoQualityCache.set(fileId, null);
+          }
+          cleanup();
+        }, 8000);
+
         v.onloadedmetadata = () => {
           if (v.videoHeight > 0) {
             const q = detectVideoQuality({ width: v.videoWidth, height: v.videoHeight });
-            if (q) setProbedQuality((prev) => ({ ...prev, [f.id]: q }));
+            if (q) {
+              probedVideoQualityCache.set(fileId, q);
+              setProbedQuality((prev) => ({ ...prev, [fileId]: q }));
+            } else {
+              probedVideoQualityCache.set(fileId, null);
+            }
+          } else {
+            probedVideoQualityCache.set(fileId, null);
           }
-          v.src = '';
+          cleanup();
         };
+
         v.onerror = () => {
-          v.src = '';
+          // Record failure so we never spam download requests on tab changes
+          probedVideoQualityCache.set(fileId, null);
+          cleanup();
         };
+
+        v.src = getDownloadUrl(f.targetId || f.id);
       } catch {
-        // ignore probe error
+        probedVideoQualityCache.set(fileId, null);
       }
     }
   }, [items, probedQuality]);
@@ -603,6 +656,84 @@ export function DrivePage() {
   // the "Loading Drive files..." placeholder — a full-page flash on every click.
   // Only the storage bar is refreshed, which re-renders nothing else.
 
+  const handleMoveItem = useCallback(
+    async (
+      itemToMove: DriveItemView,
+      destFolderId?: string,
+      destFolderName?: string
+    ) => {
+      const targetId = itemToMove.targetId || itemToMove.id;
+      const targetName = itemToMove.name;
+      const folderName = destFolderName || 'destination folder';
+
+      const rollback = forgetItem(itemToMove.id, itemsRef.current);
+      driveCache.removeCachedItem(itemToMove.id);
+
+      try {
+        await moveItem(targetId, destFolderId || '', currentFolderId);
+        driveCache.invalidateFolder(section, currentFolderId);
+        if (destFolderId) {
+          driveCache.invalidateFolder('files', destFolderId);
+        }
+        showToast(`Moved "${targetName}" to ${folderName}`);
+        refreshStorage();
+      } catch (err) {
+        rollback();
+        reportMutationError(err, 'Failed to move item');
+      }
+    },
+    [currentFolderId, forgetItem, reportMutationError, section, showToast]
+  );
+
+  const handleTouchStart = useCallback(
+    (item: DriveItemView, e: React.TouchEvent) => {
+      if (section === 'trash') return;
+      const touch = e.touches[0];
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+      touchDragItemRef.current = item;
+    },
+    [section]
+  );
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!touchStartPosRef.current || !touchDragItemRef.current) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartPosRef.current.x;
+    const dy = touch.clientY - touchStartPosRef.current.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > 12) {
+      if (!touchDragItemRef.current) return;
+      setTouchDragItem(touchDragItemRef.current);
+      setTouchDragCoords({ x: touch.clientX, y: touch.clientY });
+
+      const el = document.elementFromPoint(touch.clientX, touch.clientY);
+      const folderEl = el?.closest('[data-folder-id]');
+      const folderId = folderEl?.getAttribute('data-folder-id');
+
+      if (folderId && folderId !== touchDragItemRef.current.id) {
+        setDropTargetFolderId(folderId);
+        dropTargetFolderIdRef.current = folderId;
+      } else {
+        setDropTargetFolderId(null);
+        dropTargetFolderIdRef.current = null;
+      }
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (touchDragItemRef.current && dropTargetFolderIdRef.current) {
+      const targetFolder = itemsRef.current.find((f) => f.id === dropTargetFolderIdRef.current);
+      handleMoveItem(touchDragItemRef.current, dropTargetFolderIdRef.current, targetFolder?.name);
+    }
+    setTouchDragItem(null);
+    setTouchDragCoords(null);
+    setDropTargetFolderId(null);
+    touchDragItemRef.current = null;
+    dropTargetFolderIdRef.current = null;
+    touchStartPosRef.current = null;
+  }, [handleMoveItem]);
+
   const handleTrash = async (id: string) => {
     const item = items.find((i) => i.id === id);
     const rollback = forgetItem(id, items);
@@ -886,7 +1017,7 @@ export function DrivePage() {
             disabled={isLoading || isRevalidating}
             title={isRevalidating ? 'Updating in background...' : 'Refresh folder contents'}
             aria-label="Refresh folder"
-            className="ml-1 p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 transition-colors disabled:opacity-50"
+            className="ml-1 p-1 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 transition-colors disabled:opacity-50"
           >
             <svg
               className={`w-3.5 h-3.5 ${isRevalidating ? 'animate-spin text-accent' : ''}`}
@@ -1040,9 +1171,22 @@ export function DrivePage() {
           </div>
         )
       ) : items.length === 0 ? (
-        <div className="p-16 text-center text-sm text-slate-400 bg-white/40 dark:bg-slate-900/40 rounded-3xl border border-slate-200/80 dark:border-slate-800">
-          {section === 'trash' ? 'Trash is empty' : 'No files or folders found'}
-        </div>
+        section === 'trash' ? (
+          <div className="py-20 sm:py-28 flex flex-col items-center justify-center text-center select-none animate-fade-in">
+            <img
+              src="https://ssl.gstatic.com/docs/doclist/images/empty_state_trash_v4.svg"
+              alt="Trash is empty"
+              className="w-52 sm:w-64 h-auto mb-6 pointer-events-none"
+            />
+            <p className="text-lg sm:text-xl font-normal text-slate-800 dark:text-slate-200">
+              Trash is empty
+            </p>
+          </div>
+        ) : (
+          <div className="p-16 text-center text-sm text-slate-400 bg-white/40 dark:bg-slate-900/40 rounded-3xl border border-slate-200/80 dark:border-slate-800">
+            No files or folders found
+          </div>
+        )
       ) : viewMode === 'list' ? (
         /* ======================== LIST VIEW ======================== */
         <div className="p-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm">
@@ -1052,12 +1196,51 @@ export function DrivePage() {
               const isMenuOpen = activeMenuFileId === item.id;
               const openUpwards = idx >= Math.max(2, items.length - 2) && items.length > 3;
 
+              const isDropTarget = isFolder && dropTargetFolderId === item.id;
+
               return (
                 <div
                   key={item.id}
-                  className={`py-3 px-2 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-xl transition-colors group relative ${
-                    isMenuOpen ? 'z-30' : 'z-auto'
-                  }`}
+                  data-folder-id={isFolder ? item.id : undefined}
+                  draggable={section !== 'trash'}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/plain', item.id);
+                    setDraggedItem(item);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedItem(null);
+                    setDropTargetFolderId(null);
+                  }}
+                  onDragOver={(e) => {
+                    if (!isFolder) return;
+                    e.preventDefault();
+                    if (draggedItem && draggedItem.id !== item.id) {
+                      setDropTargetFolderId(item.id);
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    if (!isFolder) return;
+                    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                    setDropTargetFolderId(null);
+                  }}
+                  onDrop={(e) => {
+                    if (!isFolder) return;
+                    e.preventDefault();
+                    if (draggedItem && draggedItem.id !== item.id) {
+                      handleMoveItem(draggedItem, item.id, item.name);
+                    }
+                    setDraggedItem(null);
+                    setDropTargetFolderId(null);
+                  }}
+                  onTouchStart={(e) => handleTouchStart(item, e)}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={handleTouchEnd}
+                  onTouchCancel={handleTouchEnd}
+                  className={`py-3 px-2 flex items-center justify-between rounded-xl transition-all group relative ${
+                    isDropTarget
+                      ? 'ring-2 ring-accent bg-accent-light/50 dark:bg-accent-dark/50 scale-[1.01] shadow-md z-20'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  } ${isMenuOpen ? 'z-30' : 'z-auto'}`}
                 >
                   <div
                     onClick={() => (isFolder ? handleOpenFolder(item) : handlePreviewFile(item))}
@@ -1117,8 +1300,8 @@ export function DrivePage() {
                     {/* More Actions Dropdown Menu */}
                     <div
                       className={`absolute right-0 ${
-                        openUpwards ? 'bottom-full mb-1.5 origin-bottom-right' : 'top-full mt-1.5 origin-top-right'
-                      } w-48 sm:w-52 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1.5 z-50 transition-all duration-150 ${
+                        openUpwards ? 'bottom-full mb-1 sm:mb-1.5 origin-bottom-right' : 'top-full mt-1 sm:mt-1.5 origin-top-right'
+                      } w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${
                         isMenuOpen
                           ? 'opacity-100 scale-100 pointer-events-auto'
                           : 'opacity-0 scale-95 pointer-events-none'
@@ -1132,7 +1315,7 @@ export function DrivePage() {
                               setSharingItem(item);
                             }}
                             title="Share"
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -1146,7 +1329,7 @@ export function DrivePage() {
                               handleCopyItemLink(item);
                             }}
                             title="Copy link"
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -1163,7 +1346,7 @@ export function DrivePage() {
                             handleOpenFolder(item);
                           }}
                           title="Open folder"
-                          className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                          className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                         >
                           <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
@@ -1180,7 +1363,7 @@ export function DrivePage() {
                               handlePreviewFile(item);
                             }}
                             title="Preview"
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -1194,7 +1377,7 @@ export function DrivePage() {
                             download={item.name}
                             title="Download"
                             onClick={() => setActiveMenuFileId(null)}
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1217,7 +1400,7 @@ export function DrivePage() {
                             rel="noopener noreferrer"
                             title="Open in Drive"
                             onClick={() => setActiveMenuFileId(null)}
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -1236,7 +1419,7 @@ export function DrivePage() {
                                 handleConvertFile(item);
                               }}
                               title="Convert Video"
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
                               <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -1251,7 +1434,7 @@ export function DrivePage() {
                                 handleConvertFile(item);
                               }}
                               title="Convert Audio"
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
                               <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -1266,7 +1449,7 @@ export function DrivePage() {
                                 handleConvertFile(item);
                               }}
                               title="Convert Document"
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
                               <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
@@ -1281,9 +1464,9 @@ export function DrivePage() {
                                 setExtractingItem(item);
                               }}
                               title="Extract Archive"
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
-                              <svg className="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                               </svg>
                               <span>Extract Archive</span>
@@ -1293,23 +1476,40 @@ export function DrivePage() {
                       )}
 
                       {section !== 'trash' && (
-                        <button
-                          onClick={() => {
-                            setActiveMenuFileId(null);
-                            setRenamingItem(item);
-                            setRenameValue(item.name);
-                          }}
-                          title="Rename"
-                          className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
-                        >
-                          <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                          </svg>
-                          <span>Rename</span>
-                        </button>
+                        <>
+                          <button
+                            onClick={() => {
+                              setActiveMenuFileId(null);
+                              setMovingItem(item);
+                            }}
+                            title="Move"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
+                          >
+                            <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M14 13l3 3m0 0l-3 3m3-3H9" />
+                            </svg>
+                            <span>Move</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setActiveMenuFileId(null);
+                              setRenamingItem(item);
+                              setRenameValue(item.name);
+                            }}
+                            title="Rename"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
+                          >
+                            <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
+                            <span>Rename</span>
+                          </button>
+                        </>
                       )}
 
-                      <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                      <div className="my-0.5 sm:my-1 border-t border-slate-100 dark:border-slate-800" />
 
                       {section === 'trash' ? (
                         <>
@@ -1319,7 +1519,7 @@ export function DrivePage() {
                               handleRestore(item.id);
                             }}
                             title="Restore"
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1332,7 +1532,7 @@ export function DrivePage() {
                               handleDeletePermanently(item.id);
                             }}
                             title="Delete permanently"
-                            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                            className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                           >
                             <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1347,7 +1547,7 @@ export function DrivePage() {
                             handleTrash(item.id);
                           }}
                           title="Move to trash"
-                          className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                          className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                         >
                           <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1400,6 +1600,7 @@ export function DrivePage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 sm:gap-3">
                 {folders.map((folder) => {
                   const isMenuOpen = activeMenuFileId === folder.id;
+                  const isDropTarget = dropTargetFolderId === folder.id;
                   const driveFolderUrl =
                     folder.webViewLink ||
                     `https://drive.google.com/drive/folders/${folder.targetId || folder.id}`;
@@ -1407,10 +1608,44 @@ export function DrivePage() {
                   return (
                     <div
                       key={folder.id}
+                      data-folder-id={folder.id}
+                      draggable={section !== 'trash'}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', folder.id);
+                        setDraggedItem(folder);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedItem(null);
+                        setDropTargetFolderId(null);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (draggedItem && draggedItem.id !== folder.id) {
+                          setDropTargetFolderId(folder.id);
+                        }
+                      }}
+                      onDragLeave={(e) => {
+                        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                        setDropTargetFolderId(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggedItem && draggedItem.id !== folder.id) {
+                          handleMoveItem(draggedItem, folder.id, folder.name);
+                        }
+                        setDraggedItem(null);
+                        setDropTargetFolderId(null);
+                      }}
+                      onTouchStart={(e) => handleTouchStart(folder, e)}
+                      onTouchMove={handleTouchMove}
+                      onTouchEnd={handleTouchEnd}
+                      onTouchCancel={handleTouchEnd}
                       onClick={() => handleOpenFolder(folder)}
-                      className={`p-2 sm:p-3.5 rounded-xl sm:rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl hover:bg-white dark:hover:bg-slate-800 hover:border-accent-border shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between relative ${
-                        isMenuOpen ? 'z-30' : 'hover:z-10'
-                      }`}
+                      className={`p-2 sm:p-3.5 rounded-xl sm:rounded-2xl border transition-all cursor-pointer group flex flex-col justify-between relative ${
+                        isDropTarget
+                          ? 'ring-2 ring-accent scale-[1.03] shadow-lg shadow-accent/20 bg-accent-light/50 dark:bg-accent-dark/50 border-accent z-20'
+                          : 'border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl hover:bg-white dark:hover:bg-slate-800 hover:border-accent-border shadow-xs hover:shadow-md'
+                      } ${isMenuOpen ? 'z-30' : 'hover:z-10'}`}
                     >
                       <div className="flex items-center justify-between gap-1 mb-1 sm:mb-2">
                         <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
@@ -1442,7 +1677,7 @@ export function DrivePage() {
 
                           {/* More Actions Dropdown Menu */}
                           <div
-                            className={`absolute right-0 top-full mt-1.5 w-48 sm:w-52 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1.5 z-50 transition-all duration-150 origin-top-right ${
+                            className={`absolute right-0 top-full mt-1 sm:mt-1.5 w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 origin-top-right max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${
                               isMenuOpen
                                 ? 'opacity-100 scale-100 pointer-events-auto'
                                 : 'opacity-0 scale-95 pointer-events-none'
@@ -1456,7 +1691,7 @@ export function DrivePage() {
                                     setSharingItem(folder);
                                   }}
                                   title="Share"
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -1470,7 +1705,7 @@ export function DrivePage() {
                                     handleCopyItemLink(folder);
                                   }}
                                   title="Copy link"
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -1486,7 +1721,7 @@ export function DrivePage() {
                                 handleOpenFolder(folder);
                               }}
                               title="Open folder"
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
                               <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
@@ -1500,7 +1735,7 @@ export function DrivePage() {
                               rel="noopener noreferrer"
                               title="Open in Drive"
                               onClick={() => setActiveMenuFileId(null)}
-                              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                              className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                             >
                               <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -1509,23 +1744,40 @@ export function DrivePage() {
                             </a>
 
                             {section !== 'trash' && (
-                              <button
-                                onClick={() => {
-                                  setActiveMenuFileId(null);
-                                  setRenamingItem(folder);
-                                  setRenameValue(folder.name);
-                                }}
-                                title="Rename"
-                                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
-                              >
-                                <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                </svg>
-                                <span>Rename</span>
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setActiveMenuFileId(null);
+                                    setMovingItem(folder);
+                                  }}
+                                  title="Move"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
+                                >
+                                  <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M14 13l3 3m0 0l-3 3m3-3H9" />
+                                  </svg>
+                                  <span>Move</span>
+                                </button>
+
+                                <button
+                                  onClick={() => {
+                                    setActiveMenuFileId(null);
+                                    setRenamingItem(folder);
+                                    setRenameValue(folder.name);
+                                  }}
+                                  title="Rename"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
+                                >
+                                  <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                  </svg>
+                                  <span>Rename</span>
+                                </button>
+                              </>
                             )}
 
-                            <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                            <div className="my-0.5 sm:my-1 border-t border-slate-100 dark:border-slate-800" />
 
                             {section === 'trash' ? (
                               <>
@@ -1535,7 +1787,7 @@ export function DrivePage() {
                                     handleRestore(folder.id);
                                   }}
                                   title="Restore"
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1548,7 +1800,7 @@ export function DrivePage() {
                                     handleDeletePermanently(folder.id);
                                   }}
                                   title="Delete permanently"
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1563,7 +1815,7 @@ export function DrivePage() {
                                   handleTrash(folder.id);
                                 }}
                                 title="Move to trash"
-                                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                               >
                                 <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1641,9 +1893,23 @@ export function DrivePage() {
                   return (
                     <div
                       key={file.id}
+                      draggable={section !== 'trash'}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', file.id);
+                        setDraggedItem(file);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedItem(null);
+                        setDropTargetFolderId(null);
+                      }}
+                      onTouchStart={(e) => handleTouchStart(file, e)}
+                      onTouchMove={handleTouchMove}
+                      onTouchEnd={handleTouchEnd}
+                      onTouchCancel={handleTouchEnd}
                       onClick={() => handlePreviewFile(file)}
-                      className={`rounded-xl sm:rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl shadow-xs hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between group cursor-pointer relative ${activeMenuFileId === file.id ? 'z-30' : 'hover:z-10'
-                        }`}
+                      className={`rounded-xl sm:rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl shadow-xs hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between group cursor-pointer relative ${
+                        activeMenuFileId === file.id ? 'z-30' : 'hover:z-10'
+                      }`}
                     >
                       {/* File Preview Banner / Thumbnail */}
                       <div className="relative aspect-video w-full bg-slate-100 dark:bg-slate-800/80 flex items-center justify-center overflow-hidden border-b border-slate-100 dark:border-slate-800 rounded-t-xl sm:rounded-t-2xl">
@@ -1752,7 +2018,7 @@ export function DrivePage() {
 
                             {/* More Actions Dropdown Menu */}
                             <div
-                              className={`absolute right-0 bottom-full mb-1.5 w-48 sm:w-52 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1.5 z-50 transition-all duration-150 origin-bottom-right ${activeMenuFileId === file.id
+                              className={`absolute right-0 bottom-full mb-1 sm:mb-1.5 w-40 sm:w-48 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800 rounded-xl shadow-lg sm:shadow-xl shadow-slate-900/10 dark:shadow-black/40 p-1 sm:p-1.5 z-50 transition-all duration-150 origin-bottom-right max-h-[min(380px,calc(100vh-120px))] overflow-y-auto ${activeMenuFileId === file.id
                                   ? 'opacity-100 scale-100 pointer-events-auto'
                                   : 'opacity-0 scale-95 pointer-events-none'
                                 }`}
@@ -1765,7 +2031,7 @@ export function DrivePage() {
                                       setSharingItem(file);
                                     }}
                                     title="Share"
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                   >
                                     <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -1779,7 +2045,7 @@ export function DrivePage() {
                                       handleCopyItemLink(file);
                                     }}
                                     title="Copy link"
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                   >
                                     <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -1795,7 +2061,7 @@ export function DrivePage() {
                                   handlePreviewFile(file);
                                 }}
                                 title="Preview"
-                                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                               >
                                 <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -1809,7 +2075,7 @@ export function DrivePage() {
                                 download={file.name}
                                 title="Download"
                                 onClick={() => setActiveMenuFileId(null)}
-                                className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors"
+                                className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                               >
                                 <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1824,7 +2090,7 @@ export function DrivePage() {
                                   rel="noopener noreferrer"
                                   title="Open in Drive"
                                   onClick={() => setActiveMenuFileId(null)}
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -1842,7 +2108,7 @@ export function DrivePage() {
                                         handleConvertFile(file);
                                       }}
                                       title="Convert Video"
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                                      className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                     >
                                       <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -1857,7 +2123,7 @@ export function DrivePage() {
                                         handleConvertFile(file);
                                       }}
                                       title="Convert Audio"
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                                      className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                     >
                                       <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -1872,7 +2138,7 @@ export function DrivePage() {
                                         handleConvertFile(file);
                                       }}
                                       title="Convert Document"
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-purple-950/40 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+                                      className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                     >
                                       <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
@@ -1888,9 +2154,9 @@ export function DrivePage() {
                                         setExtractingItem(file);
                                       }}
                                       title="Extract Archive"
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                                      className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                     >
-                                      <svg className="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                                       </svg>
                                       <span>Extract Archive</span>
@@ -1900,11 +2166,26 @@ export function DrivePage() {
                                   <button
                                     onClick={() => {
                                       setActiveMenuFileId(null);
+                                      setMovingItem(file);
+                                    }}
+                                    title="Move"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 13l3 3m0 0l-3 3m3-3H9" />
+                                    </svg>
+                                    <span>Move</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuFileId(null);
                                       setRenamingItem(file);
                                       setRenameValue(file.name);
                                     }}
                                     title="Rename"
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-accent-light dark:hover:bg-accent-dark hover:text-accent dark:hover:text-accent-textDark transition-colors whitespace-nowrap"
                                   >
                                     <svg className="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -1914,7 +2195,7 @@ export function DrivePage() {
                                 </>
                               )}
 
-                              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                              <div className="my-0.5 sm:my-1 border-t border-slate-100 dark:border-slate-800" />
 
                               {section === 'trash' ? (
                                 <>
@@ -1924,7 +2205,7 @@ export function DrivePage() {
                                       handleRestore(file.id);
                                     }}
                                     title="Restore"
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors whitespace-nowrap"
                                   >
                                     <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1937,7 +2218,7 @@ export function DrivePage() {
                                       handleDeletePermanently(file.id);
                                     }}
                                     title="Delete permanently"
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                    className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                                   >
                                     <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1952,7 +2233,7 @@ export function DrivePage() {
                                     handleTrash(file.id);
                                   }}
                                   title="Move to trash"
-                                  className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                  className="w-full flex items-center gap-2 sm:gap-2.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md sm:rounded-lg text-left text-[11px] sm:text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors whitespace-nowrap"
                                 >
                                   <svg className="w-3.5 h-3.5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -2161,6 +2442,41 @@ export function DrivePage() {
             showToast('Archive extracted successfully');
           }}
         />
+      )}
+
+      {/* Move Item Modal */}
+      {movingItem && (
+        <MoveItemModal
+          isOpen={Boolean(movingItem)}
+          item={movingItem}
+          currentFolderId={currentFolderId || undefined}
+          onClose={() => setMovingItem(null)}
+          onMoved={async (item, destId, destName) => {
+            await handleMoveItem(item, destId, destName);
+          }}
+        />
+      )}
+
+      {/* Touch Drag Floating Preview Pill */}
+      {touchDragItem && touchDragCoords && (
+        <div
+          className="fixed z-50 pointer-events-none -translate-x-1/2 -translate-y-1/2 flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-accent shadow-2xl ring-2 ring-accent/30 text-xs font-semibold text-slate-800 dark:text-slate-100"
+          style={{ left: touchDragCoords.x, top: touchDragCoords.y }}
+        >
+          <div className="w-6 h-6 rounded-lg bg-accent text-white flex items-center justify-center shrink-0 shadow-xs">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+          </div>
+          <span className="max-w-[140px] truncate">{touchDragItem.name}</span>
+          {dropTargetFolderId ? (
+            <span className="px-1.5 py-0.5 rounded text-[10px] bg-accent text-white font-bold animate-pulse">
+              Drop to Move
+            </span>
+          ) : (
+            <span className="text-[10px] text-slate-400 font-normal">Drag to folder</span>
+          )}
+        </div>
       )}
 
       {/* Action Toasts */}

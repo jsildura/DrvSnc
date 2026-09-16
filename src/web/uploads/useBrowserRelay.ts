@@ -32,6 +32,8 @@ export interface BrowserRelay {
   isRelaying: boolean;
   startRelay: (url: string, options?: StartRelayOptions) => Promise<void>;
   cancelRelay: (jobId: string) => void;
+  trackLocalProgress?: (jobId: string, stagedBytes: number, totalBytes: number) => void;
+  clearLocalProgress?: (jobId: string) => void;
 }
 
 export function useBrowserRelay(onJobChanged: () => void): BrowserRelay {
@@ -147,5 +149,23 @@ export function useBrowserRelay(onJobChanged: () => void): BrowserRelay {
     controllers.current.get(jobId)?.abort();
   }, []);
 
-  return { relayProgress, isRelaying: activeCount > 0, startRelay, cancelRelay };
+  const trackLocalProgress = useCallback((jobId: string, stagedBytes: number, totalBytes: number) => {
+    setRelayProgress((prev) => ({
+      ...prev,
+      [jobId]: { stagedBytes, totalBytes },
+    }));
+  }, []);
+
+  const clearLocalProgress = useCallback((jobId: string) => {
+    clearProgress(jobId);
+  }, [clearProgress]);
+
+  return {
+    relayProgress,
+    isRelaying: activeCount > 0,
+    startRelay,
+    cancelRelay,
+    trackLocalProgress,
+    clearLocalProgress,
+  };
 }

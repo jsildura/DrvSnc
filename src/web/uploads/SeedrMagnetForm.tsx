@@ -281,56 +281,13 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
     return (
       <div className="space-y-6">
         <div className="p-6 sm:p-8 rounded-3xl border border-indigo-200/80 dark:border-indigo-900/60 bg-gradient-to-b from-indigo-50/50 to-white/50 dark:from-indigo-950/20 dark:to-slate-900/50 backdrop-blur-xl shadow-sm space-y-6">
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Remote Torrent & Magnet Downloads
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Download torrent files at 10 Gbps cloud speeds and stream directly into Google Drive.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="flex items-center gap-1.5 font-bold text-indigo-600 dark:text-indigo-400">
-                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V6a2 2 0 10-2 2h2zm-7 4h14a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2z" />
-                </svg>
-                <span>100% Free</span>
-              </span>
-              <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                Uses Seedr&apos;s free cloud seedbox (up to 2GB per torrent, no card needed).
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-400">
-                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span>Instant Cache</span>
-              </span>
-              <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                Popular torrents transfer to Google Drive in seconds.
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-slate-800/80 border border-slate-200/60 dark:border-slate-700/60 space-y-1">
-              <span className="flex items-center gap-1.5 font-bold text-blue-600 dark:text-blue-400">
-                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                <span>Auto-Recycled</span>
-              </span>
-              <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                Automatically frees up Seedr space after Google Drive upload finishes.
-              </p>
-            </div>
+          <div className="mb-5">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Remote Torrent & Magnet Downloads
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Download torrent files at 10 Gbps cloud speeds and stream directly into Google Drive.
+            </p>
           </div>
 
           {/* Direct Seedr Login Form */}
@@ -340,7 +297,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
                 Connect Seedr.cc Account
               </h4>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Don&apos;t have an account? <a href="https://www.seedr.cc/signup" target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 font-semibold underline hover:text-indigo-500">Register free on Seedr.cc</a>
+                Don&apos;t have an account? <a href="https://www.seedr.cc/signup" target="_blank" rel="noopener noreferrer" className="text-slate-900 dark:text-slate-200 font-semibold underline hover:opacity-80">Register free on Seedr.cc</a>
               </p>
             </div>
 
@@ -381,7 +338,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
             <button
               type="submit"
               disabled={isLoggingIn || !seedrEmail.trim() || !seedrPassword.trim()}
-              className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+              className="w-full py-3 px-4 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-50 text-accent-contrast text-xs font-semibold shadow-md shadow-accent/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
             >
               <span>{isLoggingIn ? 'Connecting to Seedr...' : 'Connect Seedr Account'}</span>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -706,7 +663,7 @@ export function SeedrMagnetForm({ onJobCreated }: { onJobCreated: () => void }) 
         <button
           type="submit"
           disabled={isSubmitting || !magnetLink.trim()}
-          className="w-full py-3 px-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+          className="w-full py-3 px-6 rounded-2xl bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-accent-contrast font-semibold text-sm shadow-md shadow-accent/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />

@@ -255,21 +255,21 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[85vh] overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 pt-20 md:pt-4 pb-20 md:pb-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-2xl flex flex-col h-full max-h-full md:h-auto md:max-h-[85vh] overflow-hidden">
         {/* Modal Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="p-3 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-accent-light dark:bg-accent-dark flex items-center justify-center text-accent dark:text-accent-textDark shrink-0">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
               </svg>
             </div>
-            <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white truncate">
                 Select File from Google Drive
               </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
                 Browse your Drive folders and pick a file to convert
               </p>
             </div>
@@ -277,7 +277,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 sm:p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 ml-2"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -286,7 +286,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         </div>
 
         {/* Search & Breadcrumbs Bar */}
-        <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 flex flex-col gap-2.5">
+        <div className="p-2.5 sm:p-3.5 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 flex flex-col gap-2">
           {/* Search box */}
           <div className="relative">
             <svg
@@ -302,7 +302,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search files in Google Drive (e.g. .mp4, .mp3, .pdf, .docx)..."
-              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
             />
             {searchQuery && (
               <button
@@ -325,22 +325,22 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
           {/* Breadcrumbs Navigation or Global Search Indicator */}
           {isSearchActive ? (
             <div className="flex items-center justify-between text-xs py-0.5 px-0.5">
-              <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
-                <span className="font-semibold text-indigo-600 dark:text-indigo-400">Search Results:</span>
-                <span className="text-slate-500 dark:text-slate-400 truncate max-w-[280px]">
-                  across Google Drive for &ldquo;{debouncedQuery}&rdquo;
+              <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 min-w-0">
+                <span className="font-semibold text-accent dark:text-accent-textDark shrink-0">Search Results:</span>
+                <span className="text-slate-500 dark:text-slate-400 truncate max-w-[200px] sm:max-w-[280px]">
+                  across Drive for &ldquo;{debouncedQuery}&rdquo;
                 </span>
               </div>
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline shrink-0"
+                className="text-xs font-medium text-accent dark:text-accent-textDark hover:underline shrink-0 ml-2"
               >
                 Back to Folders
               </button>
             </div>
           ) : (
-            <nav className="flex items-center gap-1.5 overflow-x-auto text-xs text-slate-600 dark:text-slate-300 py-0.5">
+            <nav className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto text-xs text-slate-600 dark:text-slate-300 py-0.5">
               {breadcrumbs.map((crumb, idx) => {
                 const isLast = idx === breadcrumbs.length - 1;
                 return (
@@ -352,7 +352,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                       className={`whitespace-nowrap px-1.5 py-0.5 rounded hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors ${
                         isLast
                           ? 'font-semibold text-slate-900 dark:text-white'
-                          : 'text-indigo-600 dark:text-indigo-400'
+                          : 'text-accent dark:text-accent-textDark'
                       }`}
                     >
                       {crumb.name}
@@ -365,26 +365,26 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         </div>
 
         {/* File & Folder List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[250px]">
+        <div className="flex-1 overflow-y-auto p-2.5 sm:p-4 space-y-2.5 sm:space-y-3 min-h-0">
           {isLoading || isSearching ? (
-            <div className="flex flex-col items-center justify-center h-48 text-slate-400">
-              <svg className="w-8 h-8 animate-spin text-indigo-600 mb-2" fill="none" viewBox="0 0 24 24">
+            <div className="flex flex-col items-center justify-center h-36 sm:h-48 text-slate-400">
+              <svg className="w-7 h-7 sm:w-8 sm:h-8 animate-spin text-accent mb-2" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
               </svg>
               <span className="text-xs">
-                {isSearchActive ? 'Searching all Google Drive folders...' : 'Loading Drive contents...'}
+                {isSearchActive ? 'Searching Drive...' : 'Loading Drive contents...'}
               </span>
             </div>
           ) : folders.length === 0 && files.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-slate-400 dark:text-slate-500">
-              <svg className="w-10 h-10 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="flex flex-col items-center justify-center h-36 sm:h-48 text-slate-400 dark:text-slate-500">
+              <svg className="w-8 h-8 sm:w-10 sm:h-10 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
               </svg>
-              <span className="text-sm font-medium">
+              <span className="text-xs sm:text-sm font-medium">
                 {isSearchActive ? `No files matching "${debouncedQuery}" found` : 'No files found in this folder'}
               </span>
-              <span className="text-xs mt-0.5">
+              <span className="text-[11px] sm:text-xs mt-0.5 text-center px-4">
                 {isSearchActive
                   ? 'Try searching with another keyword or file extension'
                   : 'Try navigating into subfolders or searching across your Drive'}
@@ -395,18 +395,18 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               {/* Folders List */}
               {folders.length > 0 && (
                 <div>
-                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1.5 px-1">
+                  <h4 className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1 px-1">
                     Folders ({folders.length})
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-1.5">
                     {folders.map((folder) => (
                       <button
                         key={folder.id}
                         type="button"
                         onClick={() => handleOpenFolder(folder)}
-                        className="flex items-center gap-2.5 p-2 rounded-xl text-left border border-slate-200/70 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:border-slate-300 dark:hover:border-slate-700 transition-all text-xs"
+                        className="flex items-center gap-2 p-1.5 sm:p-2 rounded-xl text-left border border-slate-200/70 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:border-slate-300 dark:hover:border-slate-700 transition-all text-xs"
                       >
-                        <svg className="w-5 h-5 text-amber-500 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-accent shrink-0" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
                         </svg>
                         <span className="truncate font-medium text-slate-800 dark:text-slate-200">
@@ -421,12 +421,12 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               {/* Files List */}
               {files.length > 0 && (
                 <div>
-                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1.5 px-1">
+                  <h4 className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1 px-1">
                     {isSearchActive
                       ? `Search Results (${files.length} file${files.length === 1 ? '' : 's'})`
                       : `Files (${files.length})`}
                   </h4>
-                  <div className="space-y-1.5">
+                  <div className="space-y-1 sm:space-y-1.5">
                     {files.map((file) => {
                       const isSelected = selectedItem?.id === file.id;
                       const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
@@ -455,21 +455,21 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                             });
                             onClose();
                           }}
-                          className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
+                          className={`flex items-center justify-between p-2 sm:p-2.5 rounded-xl border cursor-pointer transition-all ${
                             isSelected
-                              ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20'
+                              ? 'bg-accent-light dark:bg-accent-dark border-accent text-accent-contrast ring-2 ring-accent/20'
                               : 'bg-white dark:bg-slate-900 border-slate-200/80 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
                           }`}
                         >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark flex items-center justify-center shrink-0">
                               {getFileIcon(file)}
                             </div>
                             <div className="min-w-0">
                               <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
                                 {file.name}
                               </p>
-                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                              <div className="flex items-center gap-2 mt-0.5 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
                                 <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-bold text-slate-600 dark:text-slate-300">
                                   {ext}
                                 </span>
@@ -478,7 +478,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
                             </div>
                           </div>
                           {isSelected && (
-                            <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                            <div className="w-5 h-5 rounded-full bg-accent text-accent-contrast flex items-center justify-center shrink-0">
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                               </svg>
@@ -495,15 +495,15 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
         </div>
 
         {/* Modal Footer */}
-        <div className="p-3.5 sm:p-4 bg-slate-50 dark:bg-slate-850 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-          <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[280px]">
+        <div className="p-2.5 sm:p-4 bg-slate-50 dark:bg-slate-850 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+          <span className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate max-w-[150px] sm:max-w-[280px]">
             {selectedItem ? `Selected: ${selectedItem.name}` : 'Select a file to continue'}
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              className="px-3 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
             >
               Cancel
             </button>
@@ -511,7 +511,7 @@ export function DriveVideoPickerModal({ isOpen, onClose, onSelect }: DriveVideoP
               type="button"
               disabled={!selectedItem}
               onClick={handleConfirm}
-              className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-3.5 sm:px-4 py-1.5 text-xs font-semibold rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               Choose File
             </button>

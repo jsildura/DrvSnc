@@ -87,12 +87,26 @@ export async function renameItem(fileId: string, name: string): Promise<DriveIte
 
 export async function moveItem(
   fileId: string,
-  addParents: string[],
-  removeParents: string[]
+  destinationFolderIdOrAddParents: string | string[],
+  currentFolderIdOrRemoveParents?: string | string[]
 ): Promise<DriveItemView> {
+  const addParents = Array.isArray(destinationFolderIdOrAddParents)
+    ? destinationFolderIdOrAddParents
+    : [destinationFolderIdOrAddParents];
+  const removeParents = currentFolderIdOrRemoveParents
+    ? Array.isArray(currentFolderIdOrRemoveParents)
+      ? currentFolderIdOrRemoveParents
+      : [currentFolderIdOrRemoveParents]
+    : undefined;
+
   return apiRequest<DriveItemView>(`/api/v1/drive/items/${encodeURIComponent(fileId)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ addParents, removeParents }),
+    body: JSON.stringify({
+      addParentFolderId: addParents[0],
+      removeParentFolderId: removeParents?.[0],
+      addParents,
+      removeParents,
+    }),
   });
 }
 

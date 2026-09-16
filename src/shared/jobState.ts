@@ -13,9 +13,9 @@ export type UploadJobStatus = (typeof uploadJobStatuses)[number];
 
 const ALLOWED_TRANSITIONS: Record<UploadJobStatus, readonly UploadJobStatus[]> = {
   staging: ['queued', 'canceled', 'failed'],
-  queued: ['fetching', 'uploading', 'cancel_requested', 'failed'],
-  fetching: ['uploading', 'cancel_requested', 'failed'],
-  uploading: ['completed', 'cancel_requested', 'failed'],
+  queued: ['fetching', 'uploading', 'cancel_requested', 'canceled', 'failed'],
+  fetching: ['uploading', 'cancel_requested', 'canceled', 'failed'],
+  uploading: ['completed', 'cancel_requested', 'canceled', 'failed'],
   cancel_requested: ['canceled', 'completed', 'failed'],
   failed: ['queued'],
   completed: [],

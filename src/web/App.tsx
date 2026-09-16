@@ -151,7 +151,7 @@ function DashboardShell() {
                 setLegalDoc('terms');
                 setShowLegalModal(true);
               }}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             >
               Terms of Service
             </button>
@@ -162,7 +162,7 @@ function DashboardShell() {
                 setLegalDoc('privacy');
                 setShowLegalModal(true);
               }}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              className="hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             >
               Privacy Policy
             </button>
