@@ -404,6 +404,33 @@ export const ExtractUploadSchema = z.object({
 
 export type ExtractUploadRequest = z.infer<typeof ExtractUploadSchema>;
 
+/**
+ * One control message for server-side archive ingestion. The browser sends only this
+ * small metadata envelope per chunk; the worker reads the actual archive bytes from
+ * Google Drive (via `fileId` + the derived byte range) and relays them to extract.me's
+ * Flow.js upload endpoint, so the archive never travels through the user's connection.
+ */
+export const ExtractIngestSchema = z.object({
+  fileId: z.string().min(1).max(256),
+  fileName: z.string().min(1).max(255),
+  fileSize: z.number().int().nonnegative(),
+  chunkNumber: z.number().int().positive(),
+  chunkSize: z.number().int().positive().max(64 * 1024 * 1024),
+  totalChunks: z.number().int().positive(),
+  identifier: z.string().min(1).max(512),
+  uid: z.string().min(1).max(128),
+  host: z.string().min(1).max(128),
+});
+
+export type ExtractIngestRequest = z.infer<typeof ExtractIngestSchema>;
+
+export interface ExtractIngestResult {
+  /** The extract.me host that accepted the chunk (may differ from the requested host on chunk 1 fallback). */
+  host: string;
+  /** Present only once the final chunk assembles the archive; null for intermediate chunks. */
+  tmpFilename: string | null;
+}
+
 export interface ExtractUploadResult {
   fileId: string;
   fileName: string;

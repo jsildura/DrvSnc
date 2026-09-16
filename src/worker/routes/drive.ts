@@ -9,6 +9,8 @@ import {
   AddPermissionSchema,
   UpdatePermissionSchema,
   ExtractUploadSchema,
+  ExtractIngestSchema,
+  ExtractIngestResult,
   ExtractInitResult,
 } from '../../shared/contracts';
 import {
@@ -38,6 +40,8 @@ import {
 import {
   getOrResolveExtractMeHost,
   uploadExtractedStreamToDrive,
+  ingestArchiveChunkToExtractMe,
+  isAllowedExtractMeHost,
   DEFAULT_EXTRACT_ME_HOST,
 } from '../services/extractMe';
 import { signStreamTicket } from '../services/streamTicket';
@@ -790,6 +794,79 @@ driveRoutes.post('/files/:fileId/extract-init', requireCsrf, async (c) => {
         error: {
           code: e.code || 'DRIVE_EXTRACT_INIT_FAILED',
           message: e.message || 'Failed to initialize archive extraction',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// POST /files/extract-ingest
+// Server-side archive relay: reads one chunk of the archive from Google Drive and forwards
+// it to extract.me's Flow.js upload endpoint. The archive bytes go Drive -> worker ->
+// extract.me and never pass through the user's browser, so extraction costs no user bandwidth.
+driveRoutes.post('/files/extract-ingest', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_JSON',
+          message: 'Invalid request body',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const parsed = ExtractIngestSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parsed.error.issues[0]?.message || 'Invalid parameters',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  if (!isAllowedExtractMeHost(parsed.data.host)) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid or unapproved extraction host',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  try {
+    const { host, tmpFilename } = await ingestArchiveChunkToExtractMe(c.env, user.id, parsed.data);
+    const response: ExtractIngestResult = { host, tmpFilename };
+    return c.json(response);
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_EXTRACT_INGEST_FAILED',
+          message: e.message || 'Failed to relay archive chunk to extraction engine',
           retriable: Boolean(e.retriable),
           requestId: c.get('requestId') || 'req-id',
         },

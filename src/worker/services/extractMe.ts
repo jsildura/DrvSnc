@@ -1,5 +1,5 @@
 import { Env } from '../env';
-import { startResumableUpload, uploadChunk, createEmptyDriveFile } from './driveClient';
+import { startResumableUpload, uploadChunk, createEmptyDriveFile, downloadFile } from './driveClient';
 
 export const EXTRACT_ME_SITE_ID = 'unarchiver';
 export const DEFAULT_EXTRACT_ME_HOST = 's88.extract.me';
@@ -8,6 +8,21 @@ export const KNOWN_EXTRACT_ME_HOSTS = [
   's88.extract.me',
   's85.extract.me',
 ];
+
+/**
+ * Guards the server-side relay against SSRF: the client supplies the target host, so it
+ * must be confirmed to be an extract.me / extract.io node before the worker will POST
+ * archive bytes to it.
+ */
+export function isAllowedExtractMeHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return (
+    h === 'extract.me' ||
+    h.endsWith('.extract.me') ||
+    h === 'extract.io' ||
+    h.endsWith('.extract.io')
+  );
+}
 
 
 function generateUid(): string {
@@ -50,6 +65,138 @@ export function getExtractMeZipUrl(
   tmpFilename: string
 ): string {
   return `https://${host}/${EXTRACT_ME_SITE_ID}/compress/zip/${uid ? `${uid}/` : 'nouid/'}${tmpFilename}`;
+}
+
+const EXTRACT_ME_CHROME_HEADERS: Record<string, string> = {
+  Origin: 'https://extract.me',
+  Referer: 'https://extract.me/',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept: '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-site',
+};
+
+/**
+ * Reads a single archive chunk from Google Drive server-side and relays it to extract.me's
+ * Flow.js chunked-upload endpoint. This is the server-side counterpart of the browser's old
+ * chunked upload: the archive bytes go Drive -> worker -> extract.me and never touch the
+ * user's connection, so extraction costs the user essentially no bandwidth.
+ *
+ * The `uid` MUST match the one later used for `unpack` and `download_d`, or per-file
+ * downloads 404 (see the extract.me open_remote-not-downloadable constraint). On the first
+ * chunk (`chunkNumber === 1`) the requested host plus the known fallbacks are tried in turn;
+ * the host that accepts the chunk is returned so the caller can pin it for the rest of the
+ * upload. Later chunks are sent only to the already-chosen host — Flow.js reassembles chunks
+ * per node, so switching mid-upload would strand them.
+ */
+export async function ingestArchiveChunkToExtractMe(
+  env: Env,
+  userId: string,
+  params: {
+    fileId: string;
+    fileName: string;
+    fileSize: number;
+    chunkNumber: number;
+    chunkSize: number;
+    totalChunks: number;
+    identifier: string;
+    uid: string;
+    host: string;
+  }
+): Promise<{ host: string; tmpFilename: string | null }> {
+  const { fileId, fileName, fileSize, chunkNumber, chunkSize, totalChunks, identifier, uid, host } =
+    params;
+
+  const safeSize = fileSize > 0 ? fileSize : 1;
+  const start = (chunkNumber - 1) * chunkSize;
+  const end = Math.min(start + chunkSize - 1, safeSize - 1);
+
+  // 1. Read this chunk's bytes from Google Drive (server-side, authenticated).
+  const driveRes = await downloadFile(env, userId, fileId, `bytes=${start}-${end}`);
+  if (!driveRes.ok && driveRes.status !== 206) {
+    throw new Error(`Failed to read archive chunk from Google Drive (status ${driveRes.status})`);
+  }
+  const chunkBytes = await driveRes.arrayBuffer();
+
+  // 2. On the first chunk only, allow falling back across known nodes; afterwards the
+  // upload is pinned to the node that already holds the earlier chunks.
+  const candidates =
+    chunkNumber === 1
+      ? [host, ...KNOWN_EXTRACT_ME_HOSTS.filter((h) => h !== host)]
+      : [host];
+
+  let lastStatus = 0;
+  let lastBody = '';
+
+  for (const candidate of candidates) {
+    if (!isAllowedExtractMeHost(candidate)) {
+      continue;
+    }
+
+    // A consumed FormData body cannot be reused, so build a fresh one per candidate.
+    const formData = new FormData();
+    formData.append('flowChunkNumber', String(chunkNumber));
+    formData.append('flowChunkSize', String(chunkSize));
+    formData.append('flowCurrentChunkSize', String(chunkBytes.byteLength));
+    formData.append('flowTotalSize', String(safeSize));
+    formData.append('flowIdentifier', identifier);
+    formData.append('flowFilename', fileName);
+    formData.append('flowRelativePath', fileName);
+    formData.append('flowTotalChunks', String(totalChunks));
+    formData.append('file', new Blob([chunkBytes], { type: 'application/octet-stream' }), fileName);
+
+    const targetUrl = `https://${candidate}/${EXTRACT_ME_SITE_ID}/upload/flow/?uid=${encodeURIComponent(uid)}&ud=1`;
+
+    try {
+      const upstreamRes = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          ...EXTRACT_ME_CHROME_HEADERS,
+          Cookie: `uid=${uid}`,
+        },
+        body: formData,
+        signal: AbortSignal.timeout(60000),
+      });
+
+      lastStatus = upstreamRes.status;
+      lastBody = await upstreamRes.text();
+
+      if (upstreamRes.ok) {
+        let tmpFilename: string | null = null;
+        try {
+          const parsed = JSON.parse(lastBody);
+          if (parsed && typeof parsed.tmp_filename === 'string') {
+            tmpFilename = parsed.tmp_filename;
+          }
+        } catch {
+          // Intermediate chunks return an empty / non-JSON body; only the final chunk
+          // carries tmp_filename. Not finding it here is expected until then.
+        }
+        return { host: candidate, tmpFilename };
+      }
+
+      // A mid-upload chunk can only go to the pinned host; do not try other nodes.
+      if (chunkNumber > 1) {
+        break;
+      }
+    } catch (err) {
+      lastStatus = 0;
+      lastBody = (err as Error).message || 'relay failed';
+      if (chunkNumber > 1) {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error(
+    `Extraction server upload failed (${lastStatus || 500})${lastBody ? `: ${lastBody.slice(0, 200)}` : ''}`
+  );
 }
 
 /**

@@ -1,4 +1,4 @@
-import { unpackArchive } from '../api/drive';
+import { unpackArchive, ingestArchiveChunk } from '../api/drive';
 
 export interface ExtractMeTreeNode {
   id?: string;
@@ -55,8 +55,23 @@ export class ExtractMeClient {
   }
 
   /**
-   * Instructs extract.me to download the Google Drive archive directly
-   * using the user's fresh Google OAuth access token.
+   * Ingests a Google Drive archive into extract.me so its contents can be listed
+   * and individual files saved to Drive.
+   *
+   * IMPORTANT: this always uses the Flow.js chunked-upload path. extract.me only
+   * serves individual extracted files (download_t / download_d) for archives that
+   * were ingested via chunked upload. Archives opened server-side via the
+   * `open_remote` WebSocket action unpack correctly, but their entries are never
+   * materialized to the per-file download location — download_d returns 404 for
+   * every file — so "Save to Google Drive" fails for all of them.
+   *
+   * The chunked upload itself runs entirely server-side: the browser sends only
+   * small per-chunk control messages, and the worker reads each chunk from Drive
+   * and relays it to extract.me (Drive -> worker -> extract.me). The archive bytes
+   * never pass through the user's connection, so extraction costs no user bandwidth.
+   *
+   * `accessToken` and `streamUrl` are retained on the params for call-site
+   * compatibility; they were only needed by the retired `open_remote` path.
    */
   openFromDrive(params: {
     fileId: string;
@@ -67,294 +82,34 @@ export class ExtractMeClient {
     onProgress?: (progressPercent: number) => void;
     signal?: AbortSignal;
   }): ExtractRemoteTask {
-    const isLocalDev =
-      typeof window !== 'undefined' &&
-      (window.location.hostname === 'localhost' ||
-        window.location.hostname === '127.0.0.1' ||
-        window.location.hostname.endsWith('.local'));
-
     const abortController = new AbortController();
     if (params.signal) {
-      params.signal.addEventListener('abort', () => abortController.abort());
-    }
-
-    const hasPublicStreamUrl =
-      Boolean(params.streamUrl) &&
-      !params.streamUrl!.includes('localhost') &&
-      !params.streamUrl!.includes('127.0.0.1');
-
-    if (isLocalDev && !hasPublicStreamUrl) {
-      const promise = this.uploadArchiveInChunks({
-        fileId: params.fileId,
-        fileName: params.fileName,
-        fileSize: params.fileSize,
-        onProgress: params.onProgress,
-        signal: abortController.signal,
-      });
-
-      return {
-        promise,
-        cancel: () => abortController.abort(),
-      };
-    }
-
-    const clientUid = this.uid;
-    const clientHost = this.host;
-
-    const wsProtocol =
-      typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const uidParam = clientUid ? `&uid=${encodeURIComponent(clientUid)}` : '';
-    const proxyWsUrl =
-      typeof window !== 'undefined' && window.location.host
-        ? `${wsProtocol}//${window.location.host}/api/v1/converter/ws?encoder=${encodeURIComponent(clientHost)}${uidParam}`
-        : `wss://${clientHost}/socket.io/?EIO=4&transport=websocket`;
-    const directWsUrl = `wss://${clientHost}/socket.io/?EIO=4&transport=websocket`;
-    const initialWsUrl = proxyWsUrl;
-
-    let ws: WebSocket | null = null;
-    let isCancelled = false;
-    let triedFallback = false;
-    let remoteResolved = false; // guards against double fallback (error msg + onerror/onclose race)
-    const operationId = `${Date.now()}_${clientHost.replace(/[^a-zA-Z0-9]/g, '')}_${Math.random().toString(36).substring(2, 8)}`;
-    let pid: number | null = null;
-    const siteId = 'unarchiver';
-    const codebaseId = 'unarchiver';
-
-    let cancelFn: () => void = () => {};
-
-    const promise = new Promise<{ tmp_filename: string; archive_filename: string }>((resolve, reject) => {
-      const cleanUp = () => {
-        if (ws) {
-          try {
-            ws.close();
-          } catch {
-            // ignore
-          }
-          ws = null;
-        }
-      };
-
-      cancelFn = () => {
-        isCancelled = true;
+      if (params.signal.aborted) {
         abortController.abort();
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(
-              `42["cancel_operation",{"site_id":"${siteId}","codebase_id":"${codebaseId}","operation_id":"${operationId}","pid":${pid || 'null'}}]`
-            );
-          } catch {
-            // ignore
-          }
-        }
-        cleanUp();
-        reject(new Error('Extraction cancelled'));
-      };
-
-      if (abortController.signal.aborted) {
-        cancelFn();
-        return;
+      } else {
+        params.signal.addEventListener('abort', () => abortController.abort());
       }
-      abortController.signal.addEventListener('abort', () => {
-        cancelFn();
-      });
+    }
 
-      const bindSocket = (socket: WebSocket) => {
-        ws = socket;
-
-        socket.onopen = () => {
-          // Connected
-        };
-
-        socket.onerror = () => {
-          if (!isCancelled && !triedFallback && socket.readyState !== WebSocket.OPEN) {
-            triedFallback = true;
-            try {
-              socket.close();
-            } catch {
-              // ignore
-            }
-            try {
-              const directSocket = new WebSocket(directWsUrl);
-              bindSocket(directSocket);
-              return;
-            } catch {
-              // ignore
-            }
-          }
-          if (!isCancelled && !remoteResolved) {
-            remoteResolved = true;
-            // Fallback to chunk upload if WebSocket connection fails
-            this.uploadArchiveInChunks({
-              fileId: params.fileId,
-              fileName: params.fileName,
-              fileSize: params.fileSize,
-              onProgress: params.onProgress,
-              signal: abortController.signal,
-            })
-              .then(resolve)
-              .catch(reject);
-            cleanUp();
-          }
-        };
-
-        socket.onclose = () => {
-          // If socket closed without final_result or error, fall back to chunked upload
-          if (!isCancelled && !remoteResolved) {
-            remoteResolved = true;
-            this.uploadArchiveInChunks({
-              fileId: params.fileId,
-              fileName: params.fileName,
-              fileSize: params.fileSize,
-              onProgress: params.onProgress,
-              signal: abortController.signal,
-            })
-              .then(resolve)
-              .catch(reject);
-          }
-        };
-
-        socket.onmessage = (event) => {
-          if (isCancelled) return;
-          const msg = String(event.data);
-
-          // Engine.IO ping/pong
-          if (msg === '2') {
-            socket.send('3');
-            return;
-          }
-
-          // Engine.IO handshake
-          if (msg.startsWith('0')) {
-            socket.send('40');
-            return;
-          }
-
-          // Socket.IO connected
-          if (msg.startsWith('40')) {
-            const ext = params.fileName.split('.').pop() || '';
-            const effectiveRemoteUrl =
-              params.streamUrl &&
-              !params.streamUrl.includes('localhost') &&
-              !params.streamUrl.includes('127.0.0.1')
-                ? params.streamUrl
-                : `gdrive://${params.fileId}`;
-
-            const payload: any = {
-              site_id: siteId,
-              codebase_id: codebaseId,
-              uid: clientUid,
-              operation_id: operationId,
-              action_type: 'open_remote',
-              remote_url: effectiveRemoteUrl,
-              original_filename: params.fileName,
-              secondary: false,
-              id3: 1,
-              ff: 1,
-              ud: 1,
-            };
-
-            if (effectiveRemoteUrl.startsWith('gdrive://')) {
-              payload.params = {
-                google_access_token: params.accessToken,
-                original_filename: params.fileName,
-                file_extension: ext,
-                filesize: params.fileSize,
-                gdrive_file_id: params.fileId,
-                secondary: false,
-                ud: 1,
-              };
-            } else {
-              // For HTTP stream URLs, match extract.me's expected URL-open format
-              payload.params = {
-                secondary: false,
-                original_filename: params.fileName,
-                filesize: params.fileSize,
-                ud: 1,
-              };
-            }
-
-            socket.send(`42["open_remote",${JSON.stringify(payload)}]`);
-            return;
-          }
-
-          // Socket.IO custom event
-          if (msg.startsWith('42')) {
-            try {
-              const json = JSON.parse(msg.substring(2));
-              const eventName = json[0];
-              const data = json[1];
-
-              if (eventName === 'open_remote' && data) {
-                if (data.pid) pid = data.pid;
-
-                const type = data.message_type;
-                if (type === 'progress') {
-                  const val = parseInt(data.progress_value, 10);
-                  if (!isNaN(val)) {
-                    params.onProgress?.(val);
-                  }
-                } else if (type === 'final_result') {
-                  remoteResolved = true;
-                  resolve({
-                    tmp_filename: data.tmp_filename,
-                    archive_filename: data.original_filename || params.fileName,
-                  });
-                  cleanUp();
-                } else if (type === 'error') {
-                  // Remote open failed, fallback to chunked upload
-                  if (!remoteResolved) {
-                    remoteResolved = true;
-                    this.uploadArchiveInChunks({
-                      fileId: params.fileId,
-                      fileName: params.fileName,
-                      fileSize: params.fileSize,
-                      onProgress: params.onProgress,
-                      signal: abortController.signal,
-                    })
-                      .then(resolve)
-                      .catch((chunkErr) => {
-                        reject(chunkErr);
-                      });
-                  }
-                  cleanUp();
-                } else if (type === 'http_auth_request') {
-                  reject(new Error('Archive requires password or authorization'));
-                  cleanUp();
-                }
-              }
-            } catch {
-              // Non-fatal parse error
-            }
-          }
-        };
-      };
-
-      try {
-        const socket = new WebSocket(initialWsUrl);
-        bindSocket(socket);
-      } catch (err) {
-        // Fallback to chunked upload
-        this.uploadArchiveInChunks({
-          fileId: params.fileId,
-          fileName: params.fileName,
-          fileSize: params.fileSize,
-          onProgress: params.onProgress,
-          signal: abortController.signal,
-        })
-          .then(resolve)
-          .catch(reject);
-      }
+    const promise = this.uploadArchiveInChunks({
+      fileId: params.fileId,
+      fileName: params.fileName,
+      fileSize: params.fileSize,
+      onProgress: params.onProgress,
+      signal: abortController.signal,
     });
 
     return {
       promise,
-      cancel: () => cancelFn(),
+      cancel: () => abortController.abort(),
     };
   }
 
   /**
-   * Uploads an archive file from Google Drive to extract.me using chunked Flow.js
-   * relay through the worker backend.
+   * Drives the server-side chunked ingest of an archive from Google Drive into
+   * extract.me. Each iteration sends one small control message to the worker, which
+   * reads that chunk's bytes from Drive and relays them to extract.me's Flow.js
+   * endpoint. No archive bytes travel through the browser.
    */
   async uploadArchiveInChunks(params: {
     fileId: string;
@@ -384,122 +139,54 @@ export class ExtractMeClient {
       actualSize = 1;
     }
 
-    const chunkSize = 2 * 1024 * 1024; // 2MB chunks for smooth progress and low latency
+    // Larger chunks than the old browser relay (8MB vs 2MB): each chunk is now a single
+    // worker round-trip that reads from Drive and posts to extract.me, so fewer, bigger
+    // chunks mean fewer round-trips while staying well under the Worker memory limit.
+    const chunkSize = 8 * 1024 * 1024;
     const totalChunks = Math.max(1, Math.ceil(actualSize / chunkSize));
     const identifier = `${actualSize}-${fileName.replace(/[^0-9a-zA-Z_-]/g, '')}`;
 
-    let uploadedBytes = 0;
-    let lastResultJson: any = null;
+    let tmpFilename: string | null = null;
 
     for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
       if (signal?.aborted) {
         throw new Error('Upload cancelled');
       }
 
-      const start = chunkIdx * chunkSize;
-      const end = Math.min(start + chunkSize - 1, actualSize - 1);
-
-      // 1. Fetch chunk from Google Drive via backend with Range
-      const driveRes = await fetch(`/api/v1/drive/files/${encodeURIComponent(fileId)}/download`, {
-        headers: {
-          Range: `bytes=${start}-${end}`,
+      const result = await ingestArchiveChunk(
+        {
+          fileId,
+          fileName,
+          fileSize: actualSize,
+          chunkNumber: chunkIdx + 1,
+          chunkSize,
+          totalChunks,
+          identifier,
+          uid: this.uid,
+          host: this.host,
         },
-        signal,
-      });
-
-      if (!driveRes.ok && driveRes.status !== 206) {
-        throw new Error(`Failed to read file chunk from Google Drive (status ${driveRes.status})`);
-      }
-
-      const chunkArrayBuffer = await driveRes.arrayBuffer();
-
-      if (signal?.aborted) {
-        throw new Error('Upload cancelled');
-      }
-
-      // 2. Build multipart form data for Flow.js upload
-      const formData = new FormData();
-      formData.append('flowChunkNumber', String(chunkIdx + 1));
-      formData.append('flowChunkSize', String(chunkSize));
-      formData.append('flowCurrentChunkSize', String(chunkArrayBuffer.byteLength));
-      formData.append('flowTotalSize', String(actualSize));
-      formData.append('flowIdentifier', identifier);
-      formData.append('flowFilename', fileName);
-      formData.append('flowRelativePath', fileName);
-      formData.append('flowTotalChunks', String(totalChunks));
-      formData.append(
-        'file',
-        new Blob([chunkArrayBuffer], { type: 'application/octet-stream' }),
-        fileName
+        signal
       );
 
-      // 3. Post to worker relay with unarchiver parameters
-      let flowRes: Response | null = null;
-      let lastErr: Error | null = null;
-      const hostCandidates = [this.host, ...KNOWN_EXTRACT_ME_HOSTS.filter((h) => h !== this.host)];
-
-      for (let hIdx = 0; hIdx < hostCandidates.length; hIdx++) {
-        const candidate = hostCandidates[hIdx];
-        const flowQuery = new URLSearchParams({
-          encoder: candidate,
-          site_id: 'unarchiver',
-          uid: this.uid,
-          ud: '1',
-        }).toString();
-
-        try {
-          const res = await fetch(`/api/v1/converter/flow?${flowQuery}`, {
-            method: 'POST',
-            body: formData,
-            signal,
-          });
-
-          if (res.ok) {
-            flowRes = res;
-            this.host = candidate;
-            break;
-          }
-
-          // If not chunk 0, cannot switch host mid-upload
-          if (chunkIdx > 0) {
-            flowRes = res;
-            break;
-          }
-          lastErr = new Error(`Extraction server (${candidate}) upload failed (${res.status})`);
-        } catch (fetchErr) {
-          lastErr = fetchErr as Error;
-          if (chunkIdx > 0) {
-            throw fetchErr;
-          }
-        }
+      // The worker may have failed over to another node on the first chunk; pin to
+      // whichever host accepted it so later chunks, unpack, and downloads all agree.
+      if (result.host) {
+        this.host = result.host;
+      }
+      if (result.tmpFilename) {
+        tmpFilename = result.tmpFilename;
       }
 
-      if (!flowRes || !flowRes.ok) {
-        const errText = flowRes ? await flowRes.text().catch(() => '') : '';
-        throw new Error(
-          lastErr?.message ||
-            `Extraction server upload failed (${flowRes?.status || 500}): ${errText || 'Proxy error'}`
-        );
-      }
-
-      const responseText = await flowRes.text();
-      try {
-        lastResultJson = JSON.parse(responseText);
-      } catch {
-        // not final or non-json
-      }
-
-      uploadedBytes += chunkArrayBuffer.byteLength;
-      const progressPercent = Math.min(99, Math.round((uploadedBytes / actualSize) * 100));
+      const progressPercent = Math.min(99, Math.round(((chunkIdx + 1) / totalChunks) * 100));
       onProgress?.(progressPercent);
     }
 
-    if (!lastResultJson || !lastResultJson.tmp_filename) {
+    if (!tmpFilename) {
       throw new Error('Extraction server did not return temporary filename after upload');
     }
 
     return {
-      tmp_filename: lastResultJson.tmp_filename,
+      tmp_filename: tmpFilename,
       archive_filename: fileName,
     };
   }

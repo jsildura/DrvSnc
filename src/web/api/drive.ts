@@ -5,6 +5,7 @@ import {
   PermissionView,
   ExtractInitResult,
   ExtractUploadResult,
+  ExtractIngestResult,
 } from '../../shared/contracts';
 import { apiRequest } from './client';
 
@@ -214,5 +215,31 @@ export async function unpackArchive(params: {
   return apiRequest<any>('/api/v1/drive/files/extract-unpack', {
     method: 'POST',
     body: JSON.stringify(params),
+  });
+}
+
+/**
+ * Sends one server-side ingest control message: the worker reads the given chunk of the
+ * archive from Google Drive and relays it to extract.me. Only this small JSON envelope
+ * leaves the browser — the archive bytes never do.
+ */
+export async function ingestArchiveChunk(
+  params: {
+    fileId: string;
+    fileName: string;
+    fileSize: number;
+    chunkNumber: number;
+    chunkSize: number;
+    totalChunks: number;
+    identifier: string;
+    uid: string;
+    host: string;
+  },
+  signal?: AbortSignal
+): Promise<ExtractIngestResult> {
+  return apiRequest<ExtractIngestResult>('/api/v1/drive/files/extract-ingest', {
+    method: 'POST',
+    body: JSON.stringify(params),
+    signal,
   });
 }

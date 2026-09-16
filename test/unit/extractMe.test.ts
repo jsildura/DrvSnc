@@ -82,73 +82,60 @@ describe('ExtractMeClient web service', () => {
     }
   });
 
-  it('uses public streamUrl as remote_url in WebSocket open_remote payload', async () => {
+  it('ingests server-side via extract-ingest (not open_remote) and resolves tmp_filename', async () => {
     const { ExtractMeClient } = await import('../../src/web/services/extractMeClient');
     const client = new ExtractMeClient('s88.extract.me', 'uid_test');
 
-    const sentMessages: string[] = [];
-    class MockWebSocket {
-      readyState = 1;
-      onopen: (() => void) | null = null;
-      onmessage: ((ev: { data: any }) => void) | null = null;
-      onerror: ((err: any) => void) | null = null;
-      onclose: (() => void) | null = null;
-
-      constructor() {
-        setTimeout(() => {
-          this.onopen?.();
-          this.onmessage?.({ data: '0{"sid":"mock-sid"}' });
-        }, 5);
+    const requestedUrls: string[] = [];
+    let sawArchiveByteRequest = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      requestedUrls.push(url);
+      // The browser must NOT pull raw archive bytes anymore — that now happens
+      // worker-side. A ranged GET to the Drive download endpoint would be a regression.
+      if (
+        url.includes('/api/v1/drive/files/') &&
+        url.includes('/download') &&
+        (init?.method || 'GET').toUpperCase() !== 'HEAD'
+      ) {
+        sawArchiveByteRequest = true;
       }
-
-      send(data: string) {
-        sentMessages.push(data);
-        if (data === '40') {
-          setTimeout(() => {
-            this.onmessage?.({ data: '40' });
-          }, 5);
-        } else if (data.startsWith('42["open_remote"')) {
-          setTimeout(() => {
-            this.onmessage?.({
-              data: '42["open_remote",{"message_type":"final_result","tmp_filename":"unarc_123"}]',
-            });
-          }, 5);
-        }
+      if (url.includes('/api/v1/drive/files/extract-ingest')) {
+        // Worker relays the chunk and reports the accepting host + tmp filename.
+        return new Response(
+          JSON.stringify({ host: 's88.extract.me', tmpFilename: 'unarc_flow_123' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
       }
+      return new Response('Not found', { status: 404 });
+    }) as any;
 
-      close() {}
-    }
-
+    // open_remote must NOT be used anymore — a WebSocket should never be constructed.
     const originalWs = globalThis.WebSocket;
-    (globalThis as any).WebSocket = MockWebSocket;
+    const wsSpy = vi.fn();
+    (globalThis as any).WebSocket = wsSpy;
 
     try {
       const task = client.openFromDrive({
         fileId: 'gdrive-file-123',
         accessToken: 'mock-oauth-token',
         fileName: 'my-archive.zip',
-        fileSize: 50000000,
+        fileSize: 3,
         streamUrl: 'https://drvsnc.workers.dev/api/v1/converter/stream/my-archive.zip?ticket=test-ticket',
       });
 
       const res = await task.promise;
-      expect(res.tmp_filename).toBe('unarc_123');
+      expect(res.tmp_filename).toBe('unarc_flow_123');
+      expect(res.archive_filename).toBe('my-archive.zip');
 
-      const openRemoteMsg = sentMessages.find((m) => m.startsWith('42["open_remote"'));
-      expect(openRemoteMsg).toBeDefined();
-      const parsed = JSON.parse(openRemoteMsg!.substring(2));
-      expect(parsed[0]).toBe('open_remote');
-      expect(parsed[1].remote_url).toBe(
-        'https://drvsnc.workers.dev/api/v1/converter/stream/my-archive.zip?ticket=test-ticket'
-      );
-      // HTTP stream URLs must include params matching extract.me's URL-open format
-      expect(parsed[1].params).toBeDefined();
-      expect(parsed[1].params.original_filename).toBe('my-archive.zip');
-      expect(parsed[1].params.filesize).toBe(50000000);
-      expect(parsed[1].params.secondary).toBe(false);
-      expect(parsed[1].ud).toBe(1);
-      expect(parsed[1].params.ud).toBe(1);
+      // Verify the server-side ingest endpoint was used, no archive bytes crossed the
+      // browser, and no WebSocket was opened.
+      expect(requestedUrls.some((u) => u.includes('/api/v1/drive/files/extract-ingest'))).toBe(true);
+      expect(sawArchiveByteRequest).toBe(false);
+      expect(wsSpy).not.toHaveBeenCalled();
     } finally {
+      globalThis.fetch = originalFetch;
       globalThis.WebSocket = originalWs;
     }
   });
@@ -199,6 +186,104 @@ describe('ExtractMeClient web service', () => {
     expect(flattened[0].isFolder).toBe(true);
     expect(flattened[1].name).toBe('regular_file.txt');
     expect(flattened[1].isFolder).toBe(false);
+  });
+});
+
+describe('ingestArchiveChunkToExtractMe server-side relay', () => {
+  it('reads a Drive chunk and relays it to extract.me, returning host + tmp_filename', async () => {
+    const { ingestArchiveChunkToExtractMe } = await import('../../src/worker/services/extractMe');
+    const driveClient = await import('../../src/worker/services/driveClient');
+
+    const downloadSpy = vi.spyOn(driveClient, 'downloadFile').mockResolvedValue({
+      ok: true,
+      status: 206,
+      arrayBuffer: async () => new ArrayBuffer(3),
+    } as any);
+
+    const flowUrls: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      flowUrls.push(url);
+      return new Response(JSON.stringify({ tmp_filename: 's88_temp_xyz.zip', error: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    try {
+      const res = await ingestArchiveChunkToExtractMe({} as any, 'user-123', {
+        fileId: 'gdrive-1',
+        fileName: 'my-archive.zip',
+        fileSize: 3,
+        chunkNumber: 1,
+        chunkSize: 8 * 1024 * 1024,
+        totalChunks: 1,
+        identifier: '3-myarchivezip',
+        uid: 'uid_abc',
+        host: 's88.extract.me',
+      });
+
+      expect(res.host).toBe('s88.extract.me');
+      expect(res.tmpFilename).toBe('s88_temp_xyz.zip');
+
+      // Read exactly the requested byte range from Drive
+      expect(downloadSpy).toHaveBeenCalledWith({}, 'user-123', 'gdrive-1', 'bytes=0-2');
+      // Relayed to the extract.me Flow.js upload endpoint carrying the client uid
+      expect(flowUrls.some((u) => u.includes('/unarchiver/upload/flow/') && u.includes('uid=uid_abc'))).toBe(
+        true
+      );
+    } finally {
+      downloadSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('never relays archive bytes to a disallowed host', async () => {
+    const { ingestArchiveChunkToExtractMe, isAllowedExtractMeHost } = await import(
+      '../../src/worker/services/extractMe'
+    );
+
+    // Guard the route relies on to reject bad hosts before the service is ever reached.
+    expect(isAllowedExtractMeHost('evil.example.com')).toBe(false);
+    expect(isAllowedExtractMeHost('s88.extract.me')).toBe(true);
+    expect(isAllowedExtractMeHost('s85.extract.io')).toBe(true);
+
+    const driveClient = await import('../../src/worker/services/driveClient');
+    const downloadSpy = vi.spyOn(driveClient, 'downloadFile').mockResolvedValue({
+      ok: true,
+      status: 206,
+      arrayBuffer: async () => new ArrayBuffer(3),
+    } as any);
+
+    const fetchTargets: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
+      fetchTargets.push(typeof input === 'string' ? input : input.toString());
+      return new Response(JSON.stringify({ tmp_filename: 't.zip', error: 0 }), { status: 200 });
+    });
+
+    try {
+      // A disallowed host on a mid-upload chunk has no valid fallback, so it must reject
+      // outright without ever POSTing the bytes anywhere.
+      await expect(
+        ingestArchiveChunkToExtractMe({} as any, 'user-123', {
+          fileId: 'gdrive-1',
+          fileName: 'a.zip',
+          fileSize: 20 * 1024 * 1024,
+          chunkNumber: 2,
+          chunkSize: 8 * 1024 * 1024,
+          totalChunks: 3,
+          identifier: '20971520-azip',
+          uid: 'uid_abc',
+          host: 'evil.example.com',
+        })
+      ).rejects.toThrow();
+
+      // No relay POST reached the disallowed host.
+      expect(fetchTargets.some((u) => u.includes('evil.example.com'))).toBe(false);
+    } finally {
+      downloadSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
   });
 });
 
