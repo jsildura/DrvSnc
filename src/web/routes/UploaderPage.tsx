@@ -22,7 +22,7 @@ export function UploaderPage() {
       setBatches(nextBatches);
 
       const hasActiveJobs = nextJobs.some(
-        (j) => j.status === 'queued' || j.status === 'running' || j.status === 'transferring'
+        (j) => j.status !== 'completed' && j.status !== 'failed' && j.status !== 'canceled'
       );
       const hasActiveBatches = nextBatches.some(
         (b) => b.status === 'queued' || b.status === 'running'
