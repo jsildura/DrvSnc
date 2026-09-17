@@ -139,8 +139,24 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
         );
       }
 
-      // Folder creation
+      // Folder creation or file copy
       if (urlStr.includes('googleapis.com/drive/v3/files') && init?.method === 'POST') {
+        if (urlStr.includes('/copy')) {
+          const body = init.body ? JSON.parse(init.body as string) : {};
+          return new Response(
+            JSON.stringify({
+              id: 'file-copy-999',
+              name: body.name || 'Copy of Document.pdf',
+              mimeType: 'application/pdf',
+              size: '2048',
+              shared: false,
+              trashed: false,
+              starred: false,
+            }),
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
         if (urlStr.includes('/permissions')) {
           return new Response(
             JSON.stringify({
@@ -165,7 +181,7 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
         );
       }
 
-      // File update (rename, move, trash, restore)
+      // File update (rename, move, trash, restore, star)
       if (urlStr.includes('googleapis.com/drive/v3/files/') && init?.method === 'PATCH') {
         const body = init.body ? JSON.parse(init.body as string) : {};
         return new Response(
@@ -174,6 +190,7 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
             name: body.name || 'Document.pdf',
             mimeType: 'application/pdf',
             trashed: body.trashed ?? false,
+            starred: body.starred ?? false,
             shared: false,
           }),
           { headers: { 'Content-Type': 'application/json' } }
@@ -260,6 +277,45 @@ describe('Drive API Endpoints (/api/v1/drive/*)', () => {
       const perms = await permRes.json<{ permissions: PermissionView[] }>();
       expect(perms.permissions).toHaveLength(1);
       expect(perms.permissions[0].role).toBe('writer');
+
+      // 7. Test GET Starred
+      const starredRes = await SELF.fetch('https://example.com/api/v1/drive/starred', {
+        headers: { Cookie: cookie },
+      });
+      expect(starredRes.status).toBe(200);
+      const starredData = await starredRes.json<DrivePage>();
+      expect(Array.isArray(starredData.items)).toBe(true);
+
+      // 8. Test POST Copy File
+      const copyRes = await SELF.fetch('https://example.com/api/v1/drive/files/file-doc-1/copy', {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+          Origin: 'https://example.com',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'Copy of Document.pdf' }),
+      });
+      expect(copyRes.status).toBe(200);
+      const copyData = await copyRes.json<{ id: string; name: string }>();
+      expect(copyData.id).toBe('file-copy-999');
+      expect(copyData.name).toBe('Copy of Document.pdf');
+
+      // 9. Test PATCH item star toggle
+      const starRes = await SELF.fetch('https://example.com/api/v1/drive/items/file-doc-1', {
+        method: 'PATCH',
+        headers: {
+          Cookie: cookie,
+          'X-CSRF-Token': csrfToken,
+          Origin: 'https://example.com',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ starred: true }),
+      });
+      expect(starRes.status).toBe(200);
+      const starredItem = await starRes.json<{ id: string; starred: boolean }>();
+      expect(starredItem.starred).toBe(true);
 
       expect(refreshCount).toBeGreaterThanOrEqual(1);
     } finally {

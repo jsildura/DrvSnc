@@ -178,6 +178,69 @@ class DriveCacheManager {
     if (changed) this.persistToSession();
   }
 
+  /**
+   * Optimistically update an item's starred state and invalidate starred lists.
+   */
+  public handleStarToggled(item: DriveItemView, starred: boolean): void {
+    const updated = { ...item, starred };
+    this.updateCachedItem(updated);
+    for (const key of this.cache.keys()) {
+      if (key.startsWith('starred:')) {
+        this.cache.delete(key);
+      }
+    }
+    this.persistToSession();
+  }
+
+  /**
+   * Optimistically remove multiple items by ID from all cached folders.
+   */
+  public removeCachedItems(ids: string[]): void {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    let changed = false;
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.items.some((i) => idSet.has(i.id))) {
+        this.cache.set(key, {
+          ...entry,
+          items: entry.items.filter((i) => !idSet.has(i.id)),
+        });
+        changed = true;
+      }
+    }
+    if (changed) this.persistToSession();
+  }
+
+  /**
+   * Optimistically update multiple items' starred state and invalidate starred lists.
+   */
+  public handleBatchStarToggled(items: DriveItemView[], starred: boolean): void {
+    if (items.length === 0) return;
+    const updatedMap = new Map(items.map((i) => [i.id, { ...i, starred }]));
+    let changed = false;
+    for (const [key, entry] of this.cache.entries()) {
+      let entryChanged = false;
+      const updatedList = entry.items.map((item) => {
+        const replacement = updatedMap.get(item.id);
+        if (replacement) {
+          entryChanged = true;
+          return replacement;
+        }
+        return item;
+      });
+      if (entryChanged) {
+        this.cache.set(key, { ...entry, items: updatedList });
+        changed = true;
+      }
+    }
+    for (const key of this.cache.keys()) {
+      if (key.startsWith('starred:')) {
+        this.cache.delete(key);
+      }
+    }
+    this.persistToSession();
+  }
+
   // Testing helpers
   public setFreshTtl(ms: number) {
     this.freshTtlMs = ms;

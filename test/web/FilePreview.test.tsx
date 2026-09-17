@@ -259,7 +259,6 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     );
 
     expect(screen.getByText('photo1.jpg')).toBeDefined();
-    expect(screen.getByText('1 of 3')).toBeDefined();
 
     const nextBtn = screen.getByLabelText('Next file');
     fireEvent.click(nextBtn);

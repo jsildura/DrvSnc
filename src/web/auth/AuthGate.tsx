@@ -33,8 +33,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   };
 
   const [hasCompletedStartup, setHasCompletedStartup] = useState(false);
+  const isLocalDev = Boolean(import.meta.env.DEV && import.meta.env.MODE === 'development');
 
-  if (!hasCompletedStartup) {
+  if (!isLocalDev && !hasCompletedStartup) {
     return (
       <StartupLoadingScreen
         isSessionLoading={isLoading}
@@ -42,6 +43,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         onComplete={() => setHasCompletedStartup(true)}
       />
     );
+  }
+
+  if (isLocalDev && isLoading && !user) {
+    return null;
   }
 
   if (!user) {

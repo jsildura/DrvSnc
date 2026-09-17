@@ -3,6 +3,8 @@ import {
   DrivePage,
   QuotaView,
   PermissionView,
+  BatchDriveItemsRequest,
+  BatchDriveResponse,
   ExtractInitResult,
   ExtractUploadResult,
   ExtractIngestResult,
@@ -55,6 +57,20 @@ export async function listTrashItems(options?: {
 
   const queryStr = params.toString() ? `?${params.toString()}` : '';
   return apiRequest<DrivePage>(`/api/v1/drive/trash${queryStr}`);
+}
+
+export async function listStarredItems(options?: {
+  pageToken?: string;
+  pageSize?: number;
+  query?: string;
+}): Promise<DrivePage> {
+  const params = new URLSearchParams();
+  if (options?.pageToken) params.set('pageToken', options.pageToken);
+  if (options?.pageSize) params.set('pageSize', String(options.pageSize));
+  if (options?.query) params.set('query', options.query);
+
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
+  return apiRequest<DrivePage>(`/api/v1/drive/starred${queryStr}`);
 }
 
 export async function listDriveFolders(options?: {
@@ -119,6 +135,32 @@ export async function trashItem(fileId: string): Promise<DriveItemView> {
 export async function restoreItem(fileId: string): Promise<DriveItemView> {
   return apiRequest<DriveItemView>(`/api/v1/drive/items/${encodeURIComponent(fileId)}/restore`, {
     method: 'POST',
+  });
+}
+
+export async function starDriveItem(fileId: string, starred: boolean): Promise<DriveItemView> {
+  return apiRequest<DriveItemView>(`/api/v1/drive/items/${encodeURIComponent(fileId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ starred }),
+  });
+}
+
+export async function copyDriveFile(
+  fileId: string,
+  options?: { name?: string; parentFolderId?: string }
+): Promise<DriveItemView> {
+  return apiRequest<DriveItemView>(`/api/v1/drive/files/${encodeURIComponent(fileId)}/copy`, {
+    method: 'POST',
+    body: JSON.stringify(options || {}),
+  });
+}
+
+export async function batchDriveOperation(
+  request: BatchDriveItemsRequest
+): Promise<BatchDriveResponse> {
+  return apiRequest<BatchDriveResponse>('/api/v1/drive/batch', {
+    method: 'POST',
+    body: JSON.stringify(request),
   });
 }
 

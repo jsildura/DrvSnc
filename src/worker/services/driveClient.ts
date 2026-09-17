@@ -9,6 +9,9 @@ import {
   PermissionRole,
   PermissionType,
   detectVideoQuality,
+  BatchOperationType,
+  BatchDriveResultItem,
+  BatchDriveResponse,
 } from '../../shared/contracts';
 
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
@@ -126,6 +129,7 @@ export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView 
     createdTime: typeof raw.createdTime === 'string' ? raw.createdTime : null,
     shared: Boolean(raw.shared),
     trashed: Boolean(raw.trashed),
+    starred: Boolean(raw.starred),
     iconLink: typeof raw.iconLink === 'string' ? raw.iconLink : null,
     thumbnailLink: typeof raw.thumbnailLink === 'string' ? raw.thumbnailLink : null,
     webViewLink: typeof raw.webViewLink === 'string' ? raw.webViewLink : null,
@@ -417,7 +421,7 @@ export async function withDriveAuth<T>(
 }
 
 const DRIVE_FILE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata,shortcutDetails(targetId,targetMimeType),capabilities(canDownload)';
+  'id,name,mimeType,size,modifiedTime,createdTime,shared,trashed,starred,iconLink,thumbnailLink,webViewLink,owners,parents,videoMediaMetadata,shortcutDetails(targetId,targetMimeType),capabilities(canDownload)';
 
 export async function listItems(
   env: Env,
@@ -786,6 +790,51 @@ export async function listTrash(
   });
 }
 
+export async function listStarred(
+  env: Env,
+  userId: string,
+  options?: { pageSize?: number; pageToken?: string; query?: string }
+): Promise<DrivePage> {
+  return withDriveAuth(env, userId, async (token) => {
+    const url = new URL(`${DRIVE_API_BASE}/files`);
+    const qParts: string[] = ['trashed = false', 'starred = true'];
+
+    if (options?.query) {
+      const trimmed = options.query.trim();
+      const cleanTerm = trimmed.replace(/^\.+/, '');
+      const escaped = escapeQueryString(cleanTerm || trimmed);
+      if (escaped) {
+        qParts.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+      }
+    }
+
+    url.searchParams.set('q', qParts.join(' and '));
+    url.searchParams.set('fields', `nextPageToken,files(${DRIVE_FILE_FIELDS})`);
+    url.searchParams.set('pageSize', String(clampPageSize(options?.pageSize, 50)));
+    url.searchParams.set('orderBy', 'folder,modifiedTime desc');
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
+    if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
+
+    const res = await driveFetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      throw await driveErrorFromResponse(res);
+    }
+
+    const data = (await res.json()) as {
+      files?: Record<string, unknown>[];
+      nextPageToken?: string | null;
+    };
+    return {
+      items: (data.files || []).map(normalizeDriveItem),
+      nextPageToken: data.nextPageToken || null,
+    };
+  });
+}
+
 interface CachedQuota {
   quota: QuotaView;
   expiresAt: number;
@@ -852,7 +901,7 @@ export async function updateItem(
   env: Env,
   userId: string,
   fileId: string,
-  updates: { name?: string; addParents?: string; removeParents?: string }
+  updates: { name?: string; starred?: boolean; addParents?: string; removeParents?: string }
 ): Promise<DriveItemView> {
   return withDriveAuth(env, userId, async (token) => {
     const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`);
@@ -864,9 +913,43 @@ export async function updateItem(
 
     const body: Record<string, unknown> = {};
     if (updates.name) body.name = updates.name;
+    if (updates.starred !== undefined) body.starred = updates.starred;
 
     const res = await driveFetch(url.toString(), {
       method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw await driveErrorFromResponse(res);
+    }
+
+    const data = (await res.json()) as Record<string, unknown>;
+    return normalizeDriveItem(data);
+  });
+}
+
+export async function copyFile(
+  env: Env,
+  userId: string,
+  fileId: string,
+  options?: { name?: string; parentFolderId?: string }
+): Promise<DriveItemView> {
+  return withDriveAuth(env, userId, async (token) => {
+    const url = new URL(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/copy`);
+    url.searchParams.set('fields', DRIVE_FILE_FIELDS);
+    url.searchParams.set('supportsAllDrives', 'true');
+
+    const body: Record<string, unknown> = {};
+    if (options?.name) body.name = options.name;
+    if (options?.parentFolderId) body.parents = [options.parentFolderId];
+
+    const res = await driveFetch(url.toString(), {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -967,6 +1050,301 @@ export async function emptyTrash(env: Env, userId: string): Promise<void> {
     }
     invalidateQuotaCache(userId);
   });
+}
+
+export interface BatchSubrequest {
+  id: string;
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  path: string;
+  body?: Record<string, unknown>;
+}
+
+export interface BatchSubresponse {
+  id: string;
+  status: number;
+  data?: Record<string, unknown>;
+  error?: string;
+}
+
+export function buildBatchMultipartBody(boundary: string, requests: BatchSubrequest[]): string {
+  const parts: string[] = [];
+  for (const req of requests) {
+    let part = `--${boundary}\r\n`;
+    part += `Content-Type: application/http\r\n`;
+    part += `Content-ID: <${req.id}>\r\n\r\n`;
+    part += `${req.method} ${req.path} HTTP/1.1\r\n`;
+    if (req.body) {
+      const jsonBody = JSON.stringify(req.body);
+      part += `Content-Type: application/json; charset=UTF-8\r\n`;
+      part += `Content-Length: ${jsonBody.length}\r\n\r\n`;
+      part += `${jsonBody}\r\n`;
+    } else {
+      part += `\r\n`;
+    }
+    parts.push(part);
+  }
+  return parts.join('') + `--${boundary}--\r\n`;
+}
+
+export function parseBatchMultipartResponse(contentType: string, bodyText: string): BatchSubresponse[] {
+  const boundaryMatch = contentType.match(/boundary=([^;]+)/i);
+  if (!boundaryMatch) {
+    throw new Error('Missing boundary in batch response Content-Type');
+  }
+  const rawBoundary = boundaryMatch[1].trim().replace(/^"(.*)"$/, '$1');
+  const boundary = `--${rawBoundary}`;
+  const parts = bodyText.split(boundary);
+  const results: BatchSubresponse[] = [];
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed === '--') continue;
+
+    const contentIdMatch = trimmed.match(/Content-ID:\s*<?(?:response-)?([^>\r\n]+)>?/i);
+    const id = contentIdMatch ? contentIdMatch[1].trim() : '';
+
+    const statusMatch = trimmed.match(/HTTP\/1\.[01]\s+(\d{3})(?:\s+([^\r\n]*))?/i);
+    const status = statusMatch ? parseInt(statusMatch[1], 10) : 500;
+
+    let data: Record<string, unknown> | undefined;
+    const statusIdx = trimmed.search(/HTTP\/1\.[01]\s+\d{3}/i);
+    if (statusIdx !== -1) {
+      const httpPayload = trimmed.slice(statusIdx);
+      const splitPoint = httpPayload.search(/\r?\n\r?\n/);
+      if (splitPoint !== -1) {
+        const rawInnerBody = httpPayload.slice(splitPoint).trim();
+        if (rawInnerBody) {
+          try {
+            data = JSON.parse(rawInnerBody);
+          } catch {
+            // non-json or empty body
+          }
+        }
+      }
+    }
+
+    if (status >= 200 && status < 300) {
+      results.push({ id, status, data });
+    } else {
+      const errMsg =
+        typeof data?.error === 'object' && data?.error && 'message' in data.error
+          ? String((data.error as { message: unknown }).message)
+          : `Drive batch error (HTTP ${status})`;
+      results.push({ id, status, error: errMsg, data });
+    }
+  }
+
+  return results;
+}
+
+export async function executeBatchDriveRequests(
+  env: Env,
+  userId: string,
+  requests: BatchSubrequest[]
+): Promise<BatchSubresponse[]> {
+  if (requests.length === 0) return [];
+
+  return withDriveAuth(env, userId, async (token) => {
+    const boundary = `batch_drive_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const body = buildBatchMultipartBody(boundary, requests);
+
+    try {
+      const res = await driveFetch(
+        'https://www.googleapis.com/batch/drive/v3',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': `multipart/mixed; boundary=${boundary}`,
+          },
+          body,
+        },
+        { maxRetries: 1 }
+      );
+
+      if (res.ok) {
+        const contentType = res.headers.get('Content-Type') || '';
+        const text = await res.text();
+        const parsed = parseBatchMultipartResponse(contentType, text);
+        if (parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Fall through to concurrent fallback execution
+    }
+
+    // Fallback: bounded concurrency individual requests
+    const fallbackResults: BatchSubresponse[] = [];
+    await Promise.all(
+      requests.map(async (req) => {
+        try {
+          const url = new URL(`https://www.googleapis.com${req.path}`);
+          const singleRes = await driveFetch(url.toString(), {
+            method: req.method,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              ...(req.body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            body: req.body ? JSON.stringify(req.body) : undefined,
+          });
+
+          if (singleRes.ok || singleRes.status === 204) {
+            let data: Record<string, unknown> | undefined;
+            if (singleRes.status !== 204) {
+              try {
+                data = (await singleRes.json()) as Record<string, unknown>;
+              } catch {
+                // ignore
+              }
+            }
+            fallbackResults.push({ id: req.id, status: singleRes.status, data });
+          } else {
+            const err = await driveErrorFromResponse(singleRes);
+            fallbackResults.push({ id: req.id, status: singleRes.status, error: err.message });
+          }
+        } catch (e) {
+          fallbackResults.push({ id: req.id, status: 500, error: (e as Error).message || 'Request failed' });
+        }
+      })
+    );
+
+    return fallbackResults;
+  });
+}
+
+export async function batchPerformDriveAction(
+  env: Env,
+  userId: string,
+  action: BatchOperationType,
+  itemIds: string[],
+  options?: {
+    destinationFolderId?: string;
+    sourceParentFolderId?: string;
+  }
+): Promise<BatchDriveResponse> {
+  if (itemIds.length === 0) {
+    return {
+      success: true,
+      action,
+      results: [],
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+    };
+  }
+
+  // Chunk in batches of up to 100 per Google Drive batch API limit
+  const CHUNK_SIZE = 100;
+  const chunks: string[][] = [];
+  for (let i = 0; i < itemIds.length; i += CHUNK_SIZE) {
+    chunks.push(itemIds.slice(i, i + CHUNK_SIZE));
+  }
+
+  const allSubresponses: BatchSubresponse[] = [];
+
+  for (const chunk of chunks) {
+    const subrequests: BatchSubrequest[] = chunk.map((id) => {
+      const encodedId = encodeURIComponent(id);
+      switch (action) {
+        case 'trash':
+          return {
+            id,
+            method: 'PATCH',
+            path: `/drive/v3/files/${encodedId}?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true`,
+            body: { trashed: true },
+          };
+        case 'restore':
+          return {
+            id,
+            method: 'PATCH',
+            path: `/drive/v3/files/${encodedId}?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true`,
+            body: { trashed: false },
+          };
+        case 'star':
+          return {
+            id,
+            method: 'PATCH',
+            path: `/drive/v3/files/${encodedId}?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true`,
+            body: { starred: true },
+          };
+        case 'unstar':
+          return {
+            id,
+            method: 'PATCH',
+            path: `/drive/v3/files/${encodedId}?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true`,
+            body: { starred: false },
+          };
+        case 'delete':
+          return {
+            id,
+            method: 'DELETE',
+            path: `/drive/v3/files/${encodedId}?supportsAllDrives=true`,
+          };
+        case 'copy':
+          return {
+            id,
+            method: 'POST',
+            path: `/drive/v3/files/${encodedId}/copy?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true`,
+            body: options?.destinationFolderId ? { parents: [options.destinationFolderId] } : {},
+          };
+        case 'move': {
+          let movePath = `/drive/v3/files/${encodedId}?fields=${DRIVE_FILE_FIELDS}&supportsAllDrives=true&enforceSingleParent=true`;
+          if (options?.destinationFolderId) {
+            movePath += `&addParents=${encodeURIComponent(options.destinationFolderId)}`;
+          }
+          if (options?.sourceParentFolderId) {
+            movePath += `&removeParents=${encodeURIComponent(options.sourceParentFolderId)}`;
+          }
+          return {
+            id,
+            method: 'PATCH',
+            path: movePath,
+            body: {},
+          };
+        }
+      }
+    });
+
+    const chunkResults = await executeBatchDriveRequests(env, userId, subrequests);
+    allSubresponses.push(...chunkResults);
+  }
+
+  // Invalidate quota on mutations that affect storage
+  if (action === 'trash' || action === 'restore' || action === 'delete') {
+    invalidateQuotaCache(userId);
+  }
+
+  const responseMap = new Map<string, BatchSubresponse>();
+  for (const resp of allSubresponses) {
+    responseMap.set(resp.id, resp);
+  }
+
+  const results: BatchDriveResultItem[] = itemIds.map((id) => {
+    const resp = responseMap.get(id);
+    if (!resp) {
+      return { id, success: false, error: 'No response received' };
+    }
+    const isSuccess = resp.status >= 200 && resp.status < 300;
+    return {
+      id,
+      success: isSuccess,
+      item: resp.data ? normalizeDriveItem(resp.data) : undefined,
+      error: isSuccess ? undefined : (resp.error || `HTTP ${resp.status}`),
+    };
+  });
+
+  const succeeded = results.filter((r) => r.success).length;
+  const failed = results.length - succeeded;
+
+  return {
+    success: succeeded > 0 || results.length === 0,
+    action,
+    results,
+    total: results.length,
+    succeeded,
+    failed,
+  };
 }
 
 export async function getPermissions(

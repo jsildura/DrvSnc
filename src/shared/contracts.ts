@@ -247,8 +247,16 @@ export function detectVideoQuality(
   videoMetadata?: { width?: number | null; height?: number | null } | null,
   filename?: string | null
 ): string | null {
-  const height = videoMetadata?.height;
-  const width = videoMetadata?.width;
+  const rawHeight = videoMetadata?.height;
+  const rawWidth = videoMetadata?.width;
+
+  // Use the shorter dimension as the effective height for quality classification.
+  // This handles portrait/rotated videos correctly — e.g., a 1080p video shot in
+  // portrait mode reports as 1080×1920 from the Drive API, but should still be
+  // classified as 1080p (not 1440p).
+  const hasBoth = typeof rawHeight === 'number' && rawHeight > 0 && typeof rawWidth === 'number' && rawWidth > 0;
+  const height = hasBoth ? Math.min(rawHeight!, rawWidth!) : rawHeight;
+  const width = hasBoth ? Math.max(rawHeight!, rawWidth!) : rawWidth;
 
   if (typeof height === 'number' && height > 0) {
     if (height >= 2160 || (typeof width === 'number' && width >= 3840)) return '4K';
@@ -292,6 +300,7 @@ export const DriveItemViewSchema = z.object({
   createdTime: z.string().nullable().optional(),
   shared: z.boolean(),
   trashed: z.boolean(),
+  starred: z.boolean().optional(),
   iconLink: z.string().nullable().optional(),
   thumbnailLink: z.string().nullable().optional(),
   webViewLink: z.string().nullable().optional(),
@@ -354,8 +363,16 @@ export const CreateFolderSchema = z.object({
 
 export type CreateFolderRequest = z.infer<typeof CreateFolderSchema>;
 
+export const CopyFileSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  parentFolderId: z.string().max(128).optional(),
+});
+
+export type CopyFileRequest = z.infer<typeof CopyFileSchema>;
+
 export const UpdateDriveItemSchema = z.object({
   name: z.string().min(1).max(255).optional(),
+  starred: z.boolean().optional(),
   addParentFolderId: z.string().max(128).optional(),
   removeParentFolderId: z.string().max(128).optional(),
   addParents: z.array(z.string()).or(z.string()).optional(),
@@ -382,6 +399,48 @@ export const UpdatePermissionSchema = z.object({
 });
 
 export type UpdatePermissionRequest = z.infer<typeof UpdatePermissionSchema>;
+
+// Batch Drive Operations Contracts
+export const BatchOperationTypeSchema = z.enum([
+  'trash',
+  'restore',
+  'delete',
+  'star',
+  'unstar',
+  'move',
+  'copy',
+]);
+
+export type BatchOperationType = z.infer<typeof BatchOperationTypeSchema>;
+
+export const BatchDriveItemsSchema = z.object({
+  action: BatchOperationTypeSchema,
+  itemIds: z.array(z.string().min(1).max(128)).min(1).max(100),
+  destinationFolderId: z.string().max(128).optional(),
+  sourceParentFolderId: z.string().max(128).optional(),
+});
+
+export type BatchDriveItemsRequest = z.infer<typeof BatchDriveItemsSchema>;
+
+export const BatchDriveResultItemSchema = z.object({
+  id: z.string(),
+  success: z.boolean(),
+  item: DriveItemViewSchema.optional(),
+  error: z.string().optional(),
+});
+
+export type BatchDriveResultItem = z.infer<typeof BatchDriveResultItemSchema>;
+
+export const BatchDriveResponseSchema = z.object({
+  success: z.boolean(),
+  action: BatchOperationTypeSchema,
+  results: z.array(BatchDriveResultItemSchema),
+  total: z.number(),
+  succeeded: z.number(),
+  failed: z.number(),
+});
+
+export type BatchDriveResponse = z.infer<typeof BatchDriveResponseSchema>;
 
 // Archive Extraction Contracts
 export const ExtractInitSchema = z.object({

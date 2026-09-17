@@ -6,6 +6,8 @@ import {
   AccountView,
   DriveItemView,
   CreateFolderSchema,
+  CopyFileSchema,
+  BatchDriveItemsSchema,
   UpdateDriveItemSchema,
   AddPermissionSchema,
   UpdatePermissionSchema,
@@ -21,8 +23,11 @@ import {
   searchItems,
   listShared,
   listTrash,
+  listStarred,
   getQuota,
   updateItem,
+  copyFile,
+  batchPerformDriveAction,
   trashItem,
   restoreItem,
   deleteItemPermanently,
@@ -304,6 +309,32 @@ driveRoutes.get('/trash', async (c) => {
   }
 });
 
+// GET /starred
+driveRoutes.get('/starred', async (c) => {
+  const user = c.get('user')!;
+  const pageSize = c.req.query('pageSize') ? parseInt(c.req.query('pageSize')!, 10) : undefined;
+  const pageToken = c.req.query('pageToken');
+  const query = c.req.query('query') || c.req.query('q');
+
+  try {
+    const page = await listStarred(c.env, user.id, { pageSize, pageToken, query });
+    return c.json(page);
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_ERROR',
+          message: e.message || 'Failed to list starred items',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
 // GET /quota & GET /storage
 const handleQuota = async (c: Context<{ Bindings: Env; Variables: { user?: AccountView; session?: AuthenticatedSession; requestId: string } }>) => {
   const user = c.get('user')!;
@@ -377,6 +408,7 @@ driveRoutes.patch('/items/:fileId', requireCsrf, async (c) => {
 
     const item = await updateItem(c.env, user.id, fileId, {
       name: parsed.data.name,
+      starred: parsed.data.starred,
       addParents,
       removeParents,
     });
@@ -388,6 +420,163 @@ driveRoutes.patch('/items/:fileId', requireCsrf, async (c) => {
         error: {
           code: e.code || 'DRIVE_ERROR',
           message: e.message || 'Failed to update item',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+});
+
+// POST /files/:fileId/copy & POST /items/:fileId/copy
+const handleCopyFile = async (c: Context<{ Bindings: Env; Variables: { user?: AccountView; session?: AuthenticatedSession; requestId: string } }>) => {
+  const user = c.get('user')!;
+  const fileId = c.req.param('fileId');
+  if (!fileId) {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'File ID is required',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  let body: unknown = {};
+  try {
+    const text = await c.req.text();
+    if (text && text.trim().length > 0) {
+      body = JSON.parse(text);
+    }
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Invalid JSON request body',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const parsed = CopyFileSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Invalid copy parameters',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  try {
+    const item = await copyFile(c.env, user.id, fileId, parsed.data);
+    return c.json(item);
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_ERROR',
+          message: e.message || 'Failed to copy file',
+          retriable: Boolean(e.retriable),
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      (e.status as 400 | 401 | 403 | 404 | 429 | 500) || 500
+    );
+  }
+};
+
+driveRoutes.post('/files/:fileId/copy', requireCsrf, handleCopyFile);
+driveRoutes.post('/items/:fileId/copy', requireCsrf, handleCopyFile);
+
+// POST /batch
+driveRoutes.post('/batch', requireCsrf, async (c) => {
+  const user = c.get('user')!;
+
+  let body: unknown = {};
+  try {
+    const text = await c.req.text();
+    if (text && text.trim().length > 0) {
+      body = JSON.parse(text);
+    }
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Invalid JSON request body',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  const parsed = BatchDriveItemsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Invalid batch operation request',
+          details: parsed.error.issues,
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  if (parsed.data.action === 'move' && !parsed.data.destinationFolderId) {
+    return c.json(
+      {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'destinationFolderId is required for move action',
+          retriable: false,
+          requestId: c.get('requestId') || 'req-id',
+        },
+      },
+      400
+    );
+  }
+
+  try {
+    const res = await batchPerformDriveAction(
+      c.env,
+      user.id,
+      parsed.data.action,
+      parsed.data.itemIds,
+      {
+        destinationFolderId: parsed.data.destinationFolderId,
+        sourceParentFolderId: parsed.data.sourceParentFolderId,
+      }
+    );
+    return c.json(res);
+  } catch (err) {
+    const e = err as ErrorLike;
+    return c.json(
+      {
+        error: {
+          code: e.code || 'DRIVE_ERROR',
+          message: e.message || 'Failed to execute batch operation',
           retriable: Boolean(e.retriable),
           requestId: c.get('requestId') || 'req-id',
         },

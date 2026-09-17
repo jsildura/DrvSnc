@@ -1,22 +1,29 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { DriveItemView } from '../../shared/contracts';
 import { listDriveFolders, createFolder } from '../api/drive';
 
 interface MoveItemModalProps {
   isOpen: boolean;
-  item: DriveItemView | null;
+  item?: DriveItemView | null;
+  items?: DriveItemView[];
   currentFolderId?: string;
   onClose: () => void;
-  onMoved: (item: DriveItemView, destinationFolderId?: string, destinationFolderName?: string) => Promise<void> | void;
+  onMoved: (itemOrItems: any, destinationFolderId?: string, destinationFolderName?: string) => Promise<void> | void;
 }
 
 export function MoveItemModal({
   isOpen,
   item,
+  items,
   currentFolderId,
   onClose,
   onMoved,
 }: MoveItemModalProps) {
+  const effectiveItems = useMemo(() => {
+    if (items && items.length > 0) return items;
+    if (item) return [item];
+    return [];
+  }, [items, item]);
   const [currentBrowseId, setCurrentBrowseId] = useState<string | undefined>(undefined);
   const [breadcrumbs, setBreadcrumbs] = useState<{ id?: string; name: string }[]>([
     { id: undefined, name: 'My Drive' },
@@ -77,7 +84,7 @@ export function MoveItemModal({
 
   const handleOpenFolder = (folder: DriveItemView) => {
     // If moving a folder, prevent opening itself
-    if (item?.isFolder && folder.id === item.id) return;
+    if (effectiveItems.some((i: DriveItemView) => i.isFolder && folder.id === i.id)) return;
     setFolders([]);
     setNextPageToken(null);
     setCurrentBrowseId(folder.id);
@@ -117,11 +124,17 @@ export function MoveItemModal({
   };
 
   const handleExecuteMove = async () => {
-    if (!item) return;
+    if (effectiveItems.length === 0) return;
     try {
       setIsMoving(true);
       setError(null);
-      await onMoved(item, selectedFolderId, selectedFolderName);
+      if (items && items.length > 0) {
+        await onMoved(effectiveItems, selectedFolderId, selectedFolderName);
+      } else if (item) {
+        await onMoved(item, selectedFolderId, selectedFolderName);
+      } else {
+        await onMoved(effectiveItems, selectedFolderId, selectedFolderName);
+      }
       onClose();
     } catch (err) {
       setError((err as Error).message || 'Failed to move item');
@@ -142,16 +155,19 @@ export function MoveItemModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, isMoving, onClose]);
 
-  if (!isOpen || !item) return null;
+  if (!isOpen || effectiveItems.length === 0) return null;
 
   // Validation: Check if destination is same as item's current location
   const isCurrentLocation =
     (selectedFolderId === undefined && !currentFolderId) ||
     selectedFolderId === currentFolderId ||
-    (item.parents && item.parents.length > 0 && selectedFolderId === item.parents[0]);
+    (effectiveItems.length === 1 &&
+      effectiveItems[0].parents &&
+      effectiveItems[0].parents.length > 0 &&
+      selectedFolderId === effectiveItems[0].parents[0]);
 
   // Validation: If moving a folder, destination cannot be the folder itself
-  const isMovingIntoSelf = item.isFolder && selectedFolderId === item.id;
+  const isMovingIntoSelf = effectiveItems.some((i: DriveItemView) => i.isFolder && selectedFolderId === i.id);
 
   const isMoveDisabled = isMoving || isCurrentLocation || isMovingIntoSelf;
 
@@ -177,7 +193,9 @@ export function MoveItemModal({
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
-                Move &quot;{item.name}&quot;
+                {effectiveItems.length > 1
+                  ? `Move ${effectiveItems.length} items`
+                  : `Move "${effectiveItems[0].name}"`}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Choose a destination folder in Google Drive
@@ -300,7 +318,7 @@ export function MoveItemModal({
             </div>
           ) : (
             folders.map((folder) => {
-              const isSelf = item.isFolder && folder.id === item.id;
+              const isSelf = effectiveItems.some((i: DriveItemView) => i.isFolder && folder.id === i.id);
               const isSelected = selectedFolderId === folder.id;
 
               return (
@@ -401,6 +419,8 @@ export function MoveItemModal({
                 ? 'Already in this folder'
                 : isMovingIntoSelf
                 ? 'Cannot move into itself'
+                : effectiveItems.length > 1
+                ? `Move ${effectiveItems.length} items to ${selectedFolderName}`
                 : `Move to ${selectedFolderName}`}
             </span>
           </button>

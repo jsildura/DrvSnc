@@ -1074,10 +1074,6 @@ export default function FilePreview({
             </IconButton>
           </Tooltip>
 
-          <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-            {getTypeIcon(previewKind)}
-          </div>
-
           <div className="min-w-0">
             <h2 id="preview-file-name" className="text-sm font-bold text-slate-900 dark:text-white truncate" title={fileName}>
               {fileName}
@@ -1085,17 +1081,9 @@ export default function FilePreview({
             <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
               <span>{formatBytes(fileSize)}</span>
               <span>•</span>
-              <span className="uppercase font-mono text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold">
+              <span className="uppercase font-mono text-[10px] text-accent dark:text-accent-textDark font-semibold">
                 {previewKind}
               </span>
-              {hasMultipleFiles && (
-                <>
-                  <span>•</span>
-                  <span>
-                    {activeIndex + 1} of {totalFiles}
-                  </span>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -1299,11 +1287,6 @@ export default function FilePreview({
               <InfoOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-
-          {/* Close Button */}
-          <IconButton size="small" onClick={onClose} title="Close">
-            <CloseIcon fontSize="small" />
-          </IconButton>
         </div>
       </header>
 
@@ -1404,7 +1387,7 @@ export default function FilePreview({
                       href={googleAppInfo.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg flex items-center gap-2"
+                      className="px-5 py-2.5 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-xs font-semibold shadow-lg shadow-accent/20 flex items-center gap-2"
                     >
                       <span>Open in {googleAppInfo.name}</span>
                       <OpenInNewIcon fontSize="small" />
@@ -1876,7 +1859,7 @@ export default function FilePreview({
           {/* ======================= UNSUPPORTED / BINARY FALLBACK ======================= */}
           {(previewKind === 'unsupported' || previewKind === 'office') && (
             <div className="p-8 sm:p-12 rounded-3xl bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 backdrop-blur-2xl shadow-2xl text-center max-w-md flex flex-col items-center">
-              <div className="w-20 h-20 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-5 border border-indigo-500/20">
+              <div className="w-20 h-20 rounded-2xl bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark flex items-center justify-center mb-5 border border-accent-border">
                 <InsertDriveFileIcon sx={{ fontSize: 44 }} />
               </div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate max-w-full px-2" title={fileName}>
@@ -1905,7 +1888,7 @@ export default function FilePreview({
                 <a
                   href={fileUrl}
                   download={fileName}
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg transition-colors flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-xs font-semibold shadow-lg shadow-accent/20 transition-colors flex items-center gap-2"
                 >
                   <DownloadIcon fontSize="small" />
                   <span>Download</span>
@@ -1947,7 +1930,7 @@ export default function FilePreview({
                   <p className="text-xs font-bold text-slate-900 dark:text-slate-200 truncate" title={fileName}>
                     {fileName}
                   </p>
-                  <span className="text-[10px] font-mono text-indigo-600 dark:text-indigo-400 uppercase font-semibold">
+                  <span className="text-[10px] font-mono text-accent dark:text-accent-textDark uppercase font-semibold">
                     {previewKind}
                   </span>
                 </div>
@@ -2013,7 +1996,7 @@ export default function FilePreview({
                   href={webViewLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg transition-colors flex items-center justify-center gap-1.5"
+                  className="w-full py-2 px-3 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-xs font-semibold shadow-lg shadow-accent/20 transition-colors flex items-center justify-center gap-1.5"
                 >
                   <OpenInNewIcon fontSize="small" />
                   <span>Open in Google Drive</span>

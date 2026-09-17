@@ -1314,5 +1314,254 @@ describe('Drive destructive actions (grid view)', () => {
       expect(screen.getByText(/Moved "document-to-move.pdf" back to original location/i)).toBeDefined();
     });
   });
+
+  it('prevents touch-initiated drag lockup and supports mouse drag-and-drop', async () => {
+    localStorage.setItem('gdu_drive_view_mode', 'grid');
+    const mockItems = [
+      {
+        id: 'folder-touch-1',
+        name: 'Touch Folder',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: false,
+        trashed: false,
+        size: 0,
+        modifiedTime: new Date().toISOString(),
+      },
+      {
+        id: 'file-touch-1',
+        name: 'Touch File.txt',
+        mimeType: 'text/plain',
+        isFolder: false,
+        shared: false,
+        trashed: false,
+        size: 1024,
+        modifiedTime: new Date().toISOString(),
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 0, limit: 1000000, usageInDrive: 0, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(
+          JSON.stringify({ items: mockItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Touch Folder')).toBeDefined();
+      expect(screen.getByText('Touch File.txt')).toBeDefined();
+    });
+
+    const folderEl = screen.getByText('Touch Folder').closest('[data-folder-id]') as HTMLElement;
+    const fileEl = screen.getByText('Touch File.txt').closest('.group') as HTMLElement;
+    expect(folderEl).toBeDefined();
+    expect(fileEl).toBeDefined();
+
+    // 1. Initially, elements have draggable="false" (and touch-safe styles)
+    expect(folderEl.getAttribute('draggable')).toBe('false');
+    expect(fileEl.getAttribute('draggable')).toBe('false');
+    expect(folderEl.className).toContain('select-none');
+    expect(folderEl.className).toContain('touch-pan-y');
+    expect(fileEl.className).toContain('select-none');
+    expect(fileEl.className).toContain('touch-pan-y');
+
+    // 2. Touch pointerdown keeps draggable="false" and cancels touch dragstart
+    fireEvent.pointerDown(folderEl, { pointerType: 'touch' });
+    expect(folderEl.getAttribute('draggable')).toBe('false');
+
+    const dragStartEvent = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStartEvent, 'dataTransfer', {
+      value: { setData: vi.fn() },
+    });
+    folderEl.dispatchEvent(dragStartEvent);
+    expect(dragStartEvent.defaultPrevented).toBe(true);
+
+    // 3. Mouse pointerenter enables draggable="true" for desktop mouse users
+    fireEvent.pointerEnter(folderEl, { pointerType: 'mouse' });
+    expect(folderEl.getAttribute('draggable')).toBe('true');
+
+    // 4. Mouse pointerleave resets draggable="false"
+    fireEvent.pointerLeave(folderEl, { pointerType: 'mouse' });
+    expect(folderEl.getAttribute('draggable')).toBe('false');
+  });
+
+  it('opens more actions dropdown on contextmenu (long-press/right-click) and closes on outside pointerdown', async () => {
+    localStorage.setItem('gdu_drive_view_mode', 'grid');
+    const mockItems = [
+      {
+        id: 'folder-ctx-1',
+        name: 'Context Folder',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: false,
+        trashed: false,
+        size: 0,
+        modifiedTime: new Date().toISOString(),
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 0, limit: 1000000, usageInDrive: 0, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(
+          JSON.stringify({ items: mockItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Context Folder')).toBeDefined();
+    });
+
+    const folderEl = screen.getByText('Context Folder').closest('[data-folder-id]') as HTMLElement;
+    expect(folderEl).toBeDefined();
+
+    // Fire contextmenu (simulating long-press on touch or right-click on mouse)
+    const ctxEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    folderEl.dispatchEvent(ctxEvent);
+
+    // Verifies native context menu was prevented
+    expect(ctxEvent.defaultPrevented).toBe(true);
+
+    const menuEl = folderEl.querySelector('[data-actions-menu]') as HTMLElement;
+    expect(menuEl).toBeDefined();
+
+    // Verifies dropdown opened
+    await waitFor(() => {
+      expect(menuEl.className).toContain('pointer-events-auto');
+      expect(menuEl.className).toContain('opacity-100');
+    });
+
+    // Dismiss by tapping/clicking outside
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => {
+      expect(menuEl.className).toContain('pointer-events-none');
+      expect(menuEl.className).toContain('opacity-0');
+    });
+  });
+
+  it('aligns folder icon to left in folder grid card and supports back-to-top button on scroll', async () => {
+    const scrollToSpy = vi.fn();
+    window.scrollTo = scrollToSpy;
+
+    const mockItems = [
+      {
+        id: 'folder-left-align',
+        name: 'Left Aligned Folder',
+        mimeType: 'application/vnd.google-apps.folder',
+        isFolder: true,
+        shared: false,
+        size: null,
+        modifiedTime: '2026-09-05T00:00:00Z',
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 0, limit: 1000000, usageInDrive: 0, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(
+          JSON.stringify({ items: mockItems, nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Left Aligned Folder')).toBeDefined();
+    });
+
+    const folderCard = screen.getByText('Left Aligned Folder').closest('[data-folder-id]') as HTMLElement;
+    expect(folderCard).toBeDefined();
+
+    // Verify folder icon row does NOT have awkward left padding (pl-5 / pl-6)
+    const iconContainer = folderCard.querySelector('svg[aria-label="Folder"]')?.parentElement;
+    expect(iconContainer).toBeDefined();
+    const iconRow = iconContainer?.parentElement as HTMLElement;
+    expect(iconRow).toBeDefined();
+    expect(iconRow.className).not.toContain('pl-5');
+    expect(iconRow.className).not.toContain('pl-6');
+
+    // Back to top button should be hidden initially
+    const backToTopBtn = screen.getByTestId('back-to-top');
+    expect(backToTopBtn.className).toContain('opacity-0');
+
+    // Scroll down > 300px
+    Object.defineProperty(window, 'scrollY', { value: 500, writable: true });
+    fireEvent.scroll(window);
+
+    // Button should become visible
+    await waitFor(() => {
+      expect(backToTopBtn.className).toContain('opacity-100');
+    });
+
+    // Click back to top
+    fireEvent.click(backToTopBtn);
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+  });
+
+  it('renders Google Drive empty search state when search returns no items', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/v1/drive/quota') || url.includes('/api/v1/drive/storage')) {
+        return new Response(
+          JSON.stringify({ usage: 0, limit: 1000000, usageInDrive: 0, usageInDriveTrash: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/v1/drive/items')) {
+        return new Response(
+          JSON.stringify({ items: [], nextPageToken: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    render(<DrivePage />);
+
+    // Type a query in search input
+    const searchInput = screen.getByPlaceholderText('Search files...');
+    fireEvent.change(searchInput, { target: { value: 'nonexistentfile12345' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('None of your files or folders matched this search')).toBeDefined();
+      expect(screen.getByText('Try another search, or use search options to find a file by type, owner, and more.')).toBeDefined();
+    });
+
+    const img = screen.getByAltText('None of your files or folders matched this search') as HTMLImageElement;
+    expect(img.src).toContain('empty_state_no_search_results_v6.svg');
+  });
 });
+
 

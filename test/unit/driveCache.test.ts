@@ -128,6 +128,34 @@ describe('Drive Client-Side Caching (driveCache)', () => {
     expect(result.data?.items[0].id).toBe('folder-1');
   });
 
+  it('removes multiple items in batch across cached folders', () => {
+    driveCache.setCachedFolder('files', 'folder-1', undefined, {
+      items: [sampleItem1, sampleItem2],
+      nextPageToken: null,
+    });
+
+    driveCache.removeCachedItems(['folder-1', 'file-2']);
+
+    const result = driveCache.getCachedFolder('files', 'folder-1');
+    expect(result.data?.items).toHaveLength(0);
+  });
+
+  it('optimistically updates starred state for multiple items in batch', () => {
+    driveCache.setCachedFolder('files', 'folder-1', undefined, {
+      items: [
+        { ...sampleItem1, starred: false },
+        { ...sampleItem2, starred: false },
+      ],
+      nextPageToken: null,
+    });
+
+    driveCache.handleBatchStarToggled([sampleItem1, sampleItem2], true);
+
+    const result = driveCache.getCachedFolder('files', 'folder-1');
+    expect(result.data?.items[0].starred).toBe(true);
+    expect(result.data?.items[1].starred).toBe(true);
+  });
+
   it('updates an item in place across cached folders on rename', () => {
     driveCache.setCachedFolder('files', 'folder-1', undefined, {
       items: [sampleItem2],

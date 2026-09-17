@@ -189,10 +189,52 @@ iframe:-moz-full-screen {
   will-change: left, right;
 }
 
+/* Toast Notification Animations & Frosted Glass */
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+}
+
+.animate-toast-enter {
+  animation: toast-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-toast-exit {
+  animation: toast-exit 0.2s ease-in forwards;
+}
+
+.glass-toast {
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-shimmer,
   .animate-progress-stripes,
-  .animate-indeterminate {
+  .animate-indeterminate,
+  .animate-toast-enter,
+  .animate-toast-exit {
     animation: none !important;
   }
+}
+
+.select-none {
+  -webkit-touch-callout: none;
 }

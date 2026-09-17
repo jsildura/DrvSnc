@@ -4,6 +4,9 @@ import {
   getExportMimeType,
   normalizeDriveItem,
   mapDriveError,
+  buildBatchMultipartBody,
+  parseBatchMultipartResponse,
+  BatchSubrequest,
 } from '../../src/worker/services/driveClient';
 
 describe('Drive Client Utilities & Normalization', () => {
@@ -35,6 +38,7 @@ describe('Drive Client Utilities & Normalization', () => {
       createdTime: '2026-08-18T09:00:00.000Z',
       shared: true,
       trashed: false,
+      starred: true,
       iconLink: 'https://example.com/icon.png',
       thumbnailLink: 'https://example.com/thumb.png',
       webViewLink: 'https://drive.google.com/file/d/file-12345/view',
@@ -49,6 +53,7 @@ describe('Drive Client Utilities & Normalization', () => {
     expect(item.size).toBe(1048576);
     expect(item.shared).toBe(true);
     expect(item.trashed).toBe(false);
+    expect(item.starred).toBe(true);
     expect(item.owners?.[0].displayName).toBe('Alice');
   });
 
@@ -152,4 +157,91 @@ describe('Drive Client Utilities & Normalization', () => {
     expect(bareForbidden.code).toBe('DRIVE_FORBIDDEN');
     expect(bareForbidden.retriable).toBe(false);
   });
+
+  describe('Batch Multipart Handling', () => {
+    it('serializes batch subrequests to valid multipart/mixed HTTP body', () => {
+      const boundary = 'test_boundary_123';
+      const requests: BatchSubrequest[] = [
+        {
+          id: 'item-1',
+          method: 'PATCH',
+          path: '/drive/v3/files/item-1?fields=id,name',
+          body: { trashed: true },
+        },
+        {
+          id: 'item-2',
+          method: 'DELETE',
+          path: '/drive/v3/files/item-2',
+        },
+      ];
+
+      const body = buildBatchMultipartBody(boundary, requests);
+
+      expect(body).toContain('--test_boundary_123\r\n');
+      expect(body).toContain('Content-Type: application/http\r\n');
+      expect(body).toContain('Content-ID: <item-1>\r\n');
+      expect(body).toContain('PATCH /drive/v3/files/item-1?fields=id,name HTTP/1.1\r\n');
+      expect(body).toContain('Content-Type: application/json; charset=UTF-8\r\n');
+      expect(body).toContain('{"trashed":true}\r\n');
+
+      expect(body).toContain('Content-ID: <item-2>\r\n');
+      expect(body).toContain('DELETE /drive/v3/files/item-2 HTTP/1.1\r\n');
+      expect(body.endsWith('--test_boundary_123--\r\n')).toBe(true);
+    });
+
+    it('parses multipart/mixed batch responses with mixed statuses and JSON payloads', () => {
+      const boundary = 'response_boundary_xyz';
+      const contentType = `multipart/mixed; boundary="${boundary}"`;
+      const responseText = [
+        `--${boundary}`,
+        'Content-Type: application/http',
+        'Content-ID: <response-item-1>',
+        '',
+        'HTTP/1.1 200 OK',
+        'Content-Type: application/json; charset=UTF-8',
+        '',
+        JSON.stringify({ id: 'item-1', name: 'Doc.pdf', trashed: true }),
+        `--${boundary}`,
+        'Content-Type: application/http',
+        'Content-ID: <response-item-2>',
+        '',
+        'HTTP/1.1 204 No Content',
+        '',
+        '',
+        `--${boundary}`,
+        'Content-Type: application/http',
+        'Content-ID: <response-item-3>',
+        '',
+        'HTTP/1.1 404 Not Found',
+        'Content-Type: application/json; charset=UTF-8',
+        '',
+        JSON.stringify({ error: { code: 404, message: 'File not found' } }),
+        `--${boundary}--`,
+      ].join('\r\n');
+
+      const parsed = parseBatchMultipartResponse(contentType, responseText);
+
+      expect(parsed).toHaveLength(3);
+
+      expect(parsed[0].id).toBe('item-1');
+      expect(parsed[0].status).toBe(200);
+      expect(parsed[0].data).toEqual({ id: 'item-1', name: 'Doc.pdf', trashed: true });
+      expect(parsed[0].error).toBeUndefined();
+
+      expect(parsed[1].id).toBe('item-2');
+      expect(parsed[1].status).toBe(204);
+      expect(parsed[1].error).toBeUndefined();
+
+      expect(parsed[2].id).toBe('item-3');
+      expect(parsed[2].status).toBe(404);
+      expect(parsed[2].error).toBe('File not found');
+    });
+
+    it('throws when boundary is missing from content type header', () => {
+      expect(() => parseBatchMultipartResponse('application/json', '{}')).toThrow(
+        /Missing boundary/
+      );
+    });
+  });
 });
+

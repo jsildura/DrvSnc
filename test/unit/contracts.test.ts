@@ -277,5 +277,17 @@ describe('Contracts & DTO validation', () => {
       expect(detectVideoQuality(undefined, 'clip_480p.webm')).toBe('480p');
       expect(detectVideoQuality(undefined, 'no_quality_info.mp4')).toBeNull();
     });
+
+    it('handles portrait/rotated videos correctly (shorter dim = quality)', async () => {
+      const { detectVideoQuality } = await import('../../src/shared/contracts');
+      // 1080p video shot in portrait (90° rotation) — Drive API reports 1080×1920
+      expect(detectVideoQuality({ width: 1080, height: 1920 })).toBe('1080p');
+      // 720p portrait video
+      expect(detectVideoQuality({ width: 720, height: 1280 })).toBe('720p');
+      // 4K portrait video
+      expect(detectVideoQuality({ width: 2160, height: 3840 })).toBe('4K');
+      // 1440p portrait video
+      expect(detectVideoQuality({ width: 1440, height: 2560 })).toBe('1440p');
+    });
   });
 });
