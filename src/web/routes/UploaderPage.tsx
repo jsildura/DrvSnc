@@ -10,16 +10,27 @@ export function UploaderPage() {
   const [jobs, setJobs] = useState<UploadJobView[]>([]);
   const [batches, setBatches] = useState<BatchView[]>([]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (): Promise<boolean> => {
     try {
       const [jobsRes, batchesRes] = await Promise.all([
         listJobs({ limit: 50 }).catch(() => ({ jobs: [], nextCursor: null })),
         listBatches({ limit: 10 }).catch(() => ({ batches: [], nextCursor: null })),
       ]);
-      setJobs(Array.isArray(jobsRes?.jobs) ? jobsRes.jobs : []);
-      setBatches(Array.isArray(batchesRes?.batches) ? batchesRes.batches : []);
+      const nextJobs = Array.isArray(jobsRes?.jobs) ? jobsRes.jobs : [];
+      const nextBatches = Array.isArray(batchesRes?.batches) ? batchesRes.batches : [];
+      setJobs(nextJobs);
+      setBatches(nextBatches);
+
+      const hasActiveJobs = nextJobs.some(
+        (j) => j.status === 'queued' || j.status === 'running' || j.status === 'transferring'
+      );
+      const hasActiveBatches = nextBatches.some(
+        (b) => b.status === 'queued' || b.status === 'running'
+      );
+      return hasActiveJobs || hasActiveBatches;
     } catch {
       // Ignore network polling glitches
+      return false;
     }
   }, []);
 
@@ -27,14 +38,48 @@ export function UploaderPage() {
   const relay = useBrowserRelay(fetchData);
 
   useEffect(() => {
-    fetchData();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
 
-    // Poll every 2 seconds if there are active jobs/batches or on page mount
-    const interval = setInterval(() => {
-      fetchData();
-    }, 2000);
+    const scheduleNextPoll = (hasActive: boolean) => {
+      if (!isMounted) return;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (typeof document !== 'undefined' && document.hidden) return;
 
-    return () => clearInterval(interval);
+      const delayMs = hasActive ? 2500 : 15000;
+      timeoutId = setTimeout(async () => {
+        if (!isMounted) return;
+        const active = await fetchData();
+        scheduleNextPoll(active);
+      }, delayMs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        fetchData().then((active) => {
+          scheduleNextPoll(active);
+        });
+      } else if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    fetchData().then((active) => {
+      scheduleNextPoll(active);
+    });
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
   }, [fetchData]);
 
   // Active batches (not fully completed/canceled/failed)

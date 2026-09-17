@@ -8,10 +8,7 @@
   ],
   "workers_dev": true,
   "vars": {
-    "TOKEN_ENCRYPTION_KEY": "948d5a93e8b816bcaf6416fa7a72065d316f12776dab1ad442e4f724b60972a6",
-    "SESSION_SECRET": "hIrko24qSP5dLJZBH3vDWYEj7KyCIkb53eIQ3ZiyBcc",
     "GOOGLE_CLIENT_ID": "91728269120-g0mn18j34p716mqh996tgbc884dgdp39.apps.googleusercontent.com",
-    "GOOGLE_CLIENT_SECRET": "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",
     "APP_ORIGIN": "https://drvsnc.my-files-directory.workers.dev",
     "ENVIRONMENT": "production"
   },
@@ -80,10 +77,7 @@
       "vars": {
         "ENVIRONMENT": "production",
         "APP_ORIGIN": "https://drvsnc.my-files-directory.workers.dev",
-        "TOKEN_ENCRYPTION_KEY": "948d5a93e8b816bcaf6416fa7a72065d316f12776dab1ad442e4f724b60972a6",
-        "SESSION_SECRET": "hIrko24qSP5dLJZBH3vDWYEj7KyCIkb53eIQ3ZiyBcc",
-        "GOOGLE_CLIENT_ID": "91728269120-g0mn18j34p716mqh996tgbc884dgdp39.apps.googleusercontent.com",
-        "GOOGLE_CLIENT_SECRET": "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"
+        "GOOGLE_CLIENT_ID": "91728269120-g0mn18j34p716mqh996tgbc884dgdp39.apps.googleusercontent.com"
       },
       "d1_databases": [
         {

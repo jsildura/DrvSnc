@@ -349,6 +349,12 @@ async function runHlsRecording(
         const res = await uploadChunk(sessionUrl, toArrayBuffer(chunk), offset, '*');
 
         if (res.status !== 308) {
+          if (res.status === 429 || res.status === 403) {
+            throw new TransferError(
+              'DRIVE_RATE_LIMIT_EXCEEDED',
+              `Google Drive rate limit reached during HLS chunk upload (status ${res.status}). Please retry later.`
+            );
+          }
           throw new TransferError(
             'DRIVE_CHUNK_REJECTED',
             `Google Drive rejected an HLS chunk with status ${res.status}`
@@ -894,6 +900,13 @@ export async function runDriveTransfer(
                   sentLength
                 ),
               };
+            }
+
+            if (uploadRes.status === 429 || uploadRes.status === 403) {
+              throw new TransferError(
+                'DRIVE_RATE_LIMIT_EXCEEDED',
+                `Google Drive rate limit reached during chunk upload (status ${uploadRes.status}). Please retry later.`
+              );
             }
 
             throw new Error(`Google upload chunk failed with status ${uploadRes.status}`);

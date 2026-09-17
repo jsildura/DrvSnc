@@ -307,8 +307,9 @@ driveRoutes.get('/trash', async (c) => {
 // GET /quota & GET /storage
 const handleQuota = async (c: Context<{ Bindings: Env; Variables: { user?: AccountView; session?: AuthenticatedSession; requestId: string } }>) => {
   const user = c.get('user')!;
+  const forceRefresh = c.req.query('refresh') === 'true';
   try {
-    const quota = await getQuota(c.env, user.id);
+    const quota = await getQuota(c.env, user.id, forceRefresh);
     return c.json(quota);
   } catch (err) {
     const e = err as ErrorLike;

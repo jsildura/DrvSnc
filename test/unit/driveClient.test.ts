@@ -115,6 +115,7 @@ describe('Drive Client Utilities & Normalization', () => {
     const error403 = mapDriveError(403, 'The user does not have sufficient permissions for file file-123');
     expect(error403.code).toBe('DRIVE_FORBIDDEN');
     expect(error403.message).toBe('Permission denied on Google Drive resource');
+    expect(error403.retriable).toBe(false);
 
     const error404 = mapDriveError(404, 'File not found');
     expect(error404.code).toBe('DRIVE_NOT_FOUND');
@@ -122,5 +123,33 @@ describe('Drive Client Utilities & Normalization', () => {
     const error429 = mapDriveError(429, 'Rate limit exceeded');
     expect(error429.code).toBe('DRIVE_RATE_LIMIT_EXCEEDED');
     expect(error429.retriable).toBe(true);
+  });
+
+  it('correctly classifies 403 rate limit reasons as retriable rate limits', () => {
+    const throttleReasons = [
+      'userRateLimitExceeded',
+      'rateLimitExceeded',
+      'dailyLimitExceeded',
+      'sharingRateLimitExceeded',
+      'backendError',
+      'internalError',
+    ];
+
+    for (const reason of throttleReasons) {
+      const mapped = mapDriveError(403, reason);
+      expect(mapped.code).toBe('DRIVE_RATE_LIMIT_EXCEEDED');
+      expect(mapped.retriable).toBe(true);
+      expect(mapped.message).toContain('rate limit reached');
+    }
+
+    // A genuine permission denial reason remains non-retriable DRIVE_FORBIDDEN
+    const forbidden = mapDriveError(403, 'insufficientFilePermissions');
+    expect(forbidden.code).toBe('DRIVE_FORBIDDEN');
+    expect(forbidden.retriable).toBe(false);
+
+    // Bare 403 without reason also defaults to DRIVE_FORBIDDEN
+    const bareForbidden = mapDriveError(403);
+    expect(bareForbidden.code).toBe('DRIVE_FORBIDDEN');
+    expect(bareForbidden.retriable).toBe(false);
   });
 });

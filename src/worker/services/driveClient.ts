@@ -166,9 +166,143 @@ export function normalizeDriveItem(raw: Record<string, unknown>): DriveItemView 
   };
 }
 
+/**
+ * Google throttles the Drive API two different ways: a bare `429`, and — more often — a `403`
+ * whose error body carries one of these reasons. The status alone makes that 403 look like a flat
+ * "permission denied", so without inspecting the reason a transient throttle is surfaced to the
+ * user as a hard failure and never retried. This set is what tells the two apart.
+ */
+const RETRIABLE_403_REASONS = new Set([
+  'rateLimitExceeded',
+  'userRateLimitExceeded',
+  'dailyLimitExceeded',
+  'sharingRateLimitExceeded',
+  'backendError',
+  'internalError',
+]);
+
+/** Bounds on the jittered exponential backoff between throttled Drive attempts. */
+const DRIVE_MAX_RETRIES = 5;
+const DRIVE_BACKOFF_BASE_MS = 500;
+const DRIVE_BACKOFF_CAP_MS = 32_000;
+
+/**
+ * Cap on Drive requests in flight from this isolate at once. Google's per-project limit is shared
+ * across every user, so an unbounded fan-out — a bulk import, or a `listShared` page firing its own
+ * parallel folder+file queries — is what tips the whole project over the edge. This is the backstop
+ * that keeps a burst from becoming a self-inflicted 429.
+ */
+const DRIVE_MAX_CONCURRENCY = 6;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+let activeDriveRequests = 0;
+const driveWaiters: Array<() => void> = [];
+
+/** Run `task` once a Drive concurrency slot is free, releasing it (even on failure) when done. */
+async function withDriveSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (activeDriveRequests >= DRIVE_MAX_CONCURRENCY) {
+    await new Promise<void>((resolve) => driveWaiters.push(resolve));
+  }
+  activeDriveRequests++;
+  try {
+    return await task();
+  } finally {
+    activeDriveRequests--;
+    const next = driveWaiters.shift();
+    if (next) next();
+  }
+}
+
+/**
+ * Honour a `Retry-After`, which Google sends on some throttles as either a seconds count or an HTTP
+ * date. Returns null when the header is absent or unparseable, leaving the caller on exponential
+ * backoff instead.
+ */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(header);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return null;
+}
+
+/**
+ * Full-jitter exponential backoff: a uniform random point in [0, base * 2^attempt], capped. The
+ * jitter is what keeps many callers throttled at the same instant from retrying in a synchronised
+ * thundering herd — the failure mode fixed-delay backoff walks straight into.
+ */
+function backoffDelayMs(attempt: number): number {
+  const ceiling = Math.min(DRIVE_BACKOFF_CAP_MS, DRIVE_BACKOFF_BASE_MS * 2 ** attempt);
+  return Math.random() * ceiling;
+}
+
+/**
+ * Pull Google's machine-readable error `reason` out of a failed response without disturbing the
+ * body the caller still needs. Reads a clone, tolerates a non-JSON body, and returns undefined when
+ * there is nothing usable — callers then map on the status alone.
+ */
+async function extractErrorReason(res: Response): Promise<string | undefined> {
+  try {
+    const data = (await res.clone().json()) as {
+      error?: { errors?: Array<{ reason?: string }>; status?: string };
+    };
+    return data.error?.errors?.[0]?.reason || data.error?.status || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The single choke point every Drive HTTP call goes through. It bounds outbound concurrency and, on
+ * a throttle (`429`, or a `403` with a rate-limit reason) or a transient `5xx`, retries with
+ * jittered exponential backoff — preferring Google's own `Retry-After` when it sends one. The
+ * response is returned untouched (success bodies are never read here), so callers keep their
+ * existing handling of 200/206/308/204 and their own error mapping for whatever finally comes back.
+ */
+async function driveFetch(
+  input: string | URL,
+  init?: RequestInit,
+  options?: { maxRetries?: number }
+): Promise<Response> {
+  const maxRetries = options?.maxRetries ?? DRIVE_MAX_RETRIES;
+  for (let attempt = 0; ; attempt++) {
+    const res = await withDriveSlot(() => fetch(input, init));
+
+    // All "as expected" for one Drive call or another (ranged read, resumable progress, empty
+    // delete), so never treated as a failure worth retrying.
+    if (res.ok || res.status === 206 || res.status === 308 || res.status === 204) {
+      return res;
+    }
+
+    let retriable = res.status === 429 || res.status >= 500;
+    if (!retriable && res.status === 403) {
+      const reason = await extractErrorReason(res);
+      retriable = reason !== undefined && RETRIABLE_403_REASONS.has(reason);
+    }
+
+    if (!retriable || attempt >= maxRetries) {
+      return res;
+    }
+
+    await sleep(parseRetryAfterMs(res.headers.get('Retry-After')) ?? backoffDelayMs(attempt));
+  }
+}
+
+/**
+ * Map a failed Drive response to a `DriveError`, using the body's reason to tell a throttle apart
+ * from a genuine permission denial (a distinction the status code alone hides for 403).
+ */
+async function driveErrorFromResponse(res: Response): Promise<DriveError> {
+  const reason = await extractErrorReason(res);
+  const mapped = mapDriveError(res.status, reason);
+  return new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+}
+
 export function mapDriveError(
   status: number,
-  _upstreamMessage?: string
+  reason?: string
 ): { code: string; message: string; retriable: boolean } {
   switch (status) {
     case 401:
@@ -178,6 +312,15 @@ export function mapDriveError(
         retriable: false,
       };
     case 403:
+      // A 403 is Drive's usual way of saying "slow down" (reason `userRateLimitExceeded` and
+      // friends), not only "no access". Retry the throttle; keep a genuine permission denial fatal.
+      if (reason && RETRIABLE_403_REASONS.has(reason)) {
+        return {
+          code: 'DRIVE_RATE_LIMIT_EXCEEDED',
+          message: 'Google Drive API rate limit reached, please retry later',
+          retriable: true,
+        };
+      }
       return {
         code: 'DRIVE_FORBIDDEN',
         message: 'Permission denied on Google Drive resource',
@@ -317,13 +460,12 @@ export async function listItems(
       options?.orderBy || 'folder,modifiedTime desc,name'
     );
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -358,13 +500,12 @@ export async function listFolders(
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
     url.searchParams.set('orderBy', 'name');
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -388,13 +529,12 @@ export async function getFolder(
     url.searchParams.set('fields', DRIVE_FILE_FIELDS);
     url.searchParams.set('supportsAllDrives', 'true');
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -413,7 +553,7 @@ export async function createFolder(
   parentFolderId?: string
 ): Promise<DriveItemView> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_API_BASE}/files?fields=${DRIVE_FILE_FIELDS}`, {
+    const res = await driveFetch(`${DRIVE_API_BASE}/files?fields=${DRIVE_FILE_FIELDS}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -427,8 +567,7 @@ export async function createFolder(
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -458,13 +597,12 @@ export async function searchItems(
     url.searchParams.set('includeItemsFromAllDrives', 'true');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -510,12 +648,11 @@ export async function listShared(
     }
 
     const fetchFiles = async (url: URL) => {
-      const res = await fetch(url.toString(), {
+      const res = await driveFetch(url.toString(), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
-        const mapped = mapDriveError(res.status);
-        throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+        throw await driveErrorFromResponse(res);
       }
       return (await res.json()) as {
         files?: Record<string, unknown>[];
@@ -557,7 +694,7 @@ export async function listShared(
 
     try {
       const [foldersResult, mainResult] = await Promise.all([
-        fetch(folderUrl.toString(), { headers: { Authorization: `Bearer ${token}` } }).then(async (r) => {
+        driveFetch(folderUrl.toString(), { headers: { Authorization: `Bearer ${token}` } }).then(async (r) => {
           if (!r.ok) {
             // If the broad query (not 'me' in owners) fails with 400, fallback to standard sharedWithMe
             const fallbackQ = [
@@ -572,7 +709,7 @@ export async function listShared(
               if (escaped) fallbackQ.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
             }
             const fallbackUrl = buildUrl(fallbackQ.join(' and '), 100, 'folder,name');
-            const fallbackRes = await fetch(fallbackUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
+            const fallbackRes = await driveFetch(fallbackUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
             if (!fallbackRes.ok) return { files: [] };
             return (await fallbackRes.json()) as { files?: Record<string, unknown>[] };
           }
@@ -630,13 +767,12 @@ export async function listTrash(
     url.searchParams.set('includeItemsFromAllDrives', 'true');
     if (options?.pageToken) url.searchParams.set('pageToken', options.pageToken);
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -650,15 +786,40 @@ export async function listTrash(
   });
 }
 
-export async function getQuota(env: Env, userId: string): Promise<QuotaView> {
+interface CachedQuota {
+  quota: QuotaView;
+  expiresAt: number;
+}
+
+const quotaCache = new Map<string, CachedQuota>();
+const QUOTA_CACHE_TTL_MS = 60_000;
+
+export function invalidateQuotaCache(userId?: string): void {
+  if (userId) {
+    quotaCache.delete(userId);
+  } else {
+    quotaCache.clear();
+  }
+}
+
+export async function getQuota(
+  env: Env,
+  userId: string,
+  forceRefresh = false
+): Promise<QuotaView> {
+  const cached = quotaCache.get(userId);
+  const now = Date.now();
+  if (!forceRefresh && cached && cached.expiresAt > now) {
+    return cached.quota;
+  }
+
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_API_BASE}/about?fields=storageQuota`, {
+    const res = await driveFetch(`${DRIVE_API_BASE}/about?fields=storageQuota`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -671,12 +832,19 @@ export async function getQuota(env: Env, userId: string): Promise<QuotaView> {
     };
 
     const quota = data.storageQuota || {};
-    return {
+    const result: QuotaView = {
       limit: quota.limit ? parseInt(quota.limit, 10) : null,
       usage: quota.usage ? parseInt(quota.usage, 10) : 0,
       usageInDrive: quota.usageInDrive ? parseInt(quota.usageInDrive, 10) : 0,
       usageInDriveTrash: quota.usageInDriveTrash ? parseInt(quota.usageInDriveTrash, 10) : 0,
     };
+
+    quotaCache.set(userId, {
+      quota: result,
+      expiresAt: now + QUOTA_CACHE_TTL_MS,
+    });
+
+    return result;
   });
 }
 
@@ -697,7 +865,7 @@ export async function updateItem(
     const body: Record<string, unknown> = {};
     if (updates.name) body.name = updates.name;
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -707,8 +875,7 @@ export async function updateItem(
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -722,7 +889,7 @@ export async function trashItem(
   fileId: string
 ): Promise<DriveItemView> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=${DRIVE_FILE_FIELDS}`,
       {
         method: 'PATCH',
@@ -735,8 +902,7 @@ export async function trashItem(
     );
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -750,7 +916,7 @@ export async function restoreItem(
   fileId: string
 ): Promise<DriveItemView> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=${DRIVE_FILE_FIELDS}`,
       {
         method: 'PATCH',
@@ -763,8 +929,7 @@ export async function restoreItem(
     );
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -778,29 +943,29 @@ export async function deleteItemPermanently(
   fileId: string
 ): Promise<void> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`, {
+    const res = await driveFetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok && res.status !== 204) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
+    invalidateQuotaCache(userId);
   });
 }
 
 export async function emptyTrash(env: Env, userId: string): Promise<void> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_API_BASE}/files/trash`, {
+    const res = await driveFetch(`${DRIVE_API_BASE}/files/trash`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok && res.status !== 204) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
+    invalidateQuotaCache(userId);
   });
 }
 
@@ -810,14 +975,13 @@ export async function getPermissions(
   fileId: string
 ): Promise<PermissionView[]> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(id,role,type,emailAddress,displayName,photoLink)&supportsAllDrives=true`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const data = (await res.json()) as {
@@ -860,7 +1024,7 @@ export async function addPermission(
       payload.emailAddress = perm.emailAddress;
     }
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -870,8 +1034,7 @@ export async function addPermission(
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const p = (await res.json()) as {
@@ -901,7 +1064,7 @@ export async function updatePermission(
   role: string
 ): Promise<PermissionView> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?fields=id,role,type,emailAddress,displayName,photoLink&supportsAllDrives=true`,
       {
         method: 'PATCH',
@@ -914,8 +1077,7 @@ export async function updatePermission(
     );
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const p = (await res.json()) as {
@@ -944,7 +1106,7 @@ export async function removePermission(
   permissionId: string
 ): Promise<void> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permissionId)}?supportsAllDrives=true`,
       {
         method: 'DELETE',
@@ -953,8 +1115,7 @@ export async function removePermission(
     );
 
     if (!res.ok && res.status !== 204) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
   });
 }
@@ -974,13 +1135,12 @@ export async function getFileMetadata(
     url.searchParams.set('fields', DRIVE_FILE_FIELDS);
     url.searchParams.set('supportsAllDrives', 'true');
 
-    const res = await fetch(url.toString(), {
+    const res = await driveFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     return normalizeDriveItem((await res.json()) as Record<string, unknown>);
@@ -1003,11 +1163,10 @@ export async function downloadFile(
     url.searchParams.set('supportsAllDrives', 'true');
     url.searchParams.set('acknowledgeAbuse', 'true');
 
-    const res = await fetch(url.toString(), { headers });
+    const res = await driveFetch(url.toString(), { headers }, { maxRetries: 0 });
 
     if (!res.ok && res.status !== 206) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     return res;
@@ -1021,8 +1180,6 @@ export async function downloadFile(
  */
 const EXPORT_RETRY_DELAYS_MS = [200, 600];
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 async function exportFileOnce(
   env: Env,
   userId: string,
@@ -1030,22 +1187,27 @@ async function exportFileOnce(
   exportMimeType: string
 ): Promise<Response> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(
+    const res = await driveFetch(
       `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(exportMimeType)}`,
       {
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
+      { maxRetries: 0 }
     );
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
+      const reason = await extractErrorReason(res);
+      const mapped = mapDriveError(res.status, reason);
       // Name the format in the message: "could not export as application/pdf" tells
       // the caller far more than a bare "operation failed", and this message is what
-      // the preview surfaces to the user.
+      // the preview surfaces to the user. Only a genuine 403 (permission, not a
+      // throttle) means "not exportable as this format" — a rate-limit 403 keeps its
+      // retriable code so the export can be re-attempted.
+      const notExportable = res.status === 403 && mapped.code === 'DRIVE_FORBIDDEN';
       throw new DriveError(
         res.status,
-        res.status === 403 ? 'DRIVE_NOT_EXPORTABLE' : mapped.code,
-        res.status === 403
+        notExportable ? 'DRIVE_NOT_EXPORTABLE' : mapped.code,
+        notExportable
           ? `Google Drive cannot export this file as ${exportMimeType}`
           : `${mapped.message} (exporting as ${exportMimeType})`,
         mapped.retriable
@@ -1103,7 +1265,7 @@ export async function createEmptyDriveFile(
   metadata: { name: string; mimeType: string; folderId?: string }
 ): Promise<{ id: string }> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_API_BASE}/files`, {
+    const res = await driveFetch(`${DRIVE_API_BASE}/files`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1117,8 +1279,7 @@ export async function createEmptyDriveFile(
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     return (await res.json()) as { id: string };
@@ -1131,7 +1292,7 @@ export async function startResumableUpload(
   metadata: { name: string; mimeType: string; folderId?: string }
 ): Promise<string> {
   return withDriveAuth(env, userId, async (token) => {
-    const res = await fetch(`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable`, {
+    const res = await driveFetch(`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1145,8 +1306,7 @@ export async function startResumableUpload(
     });
 
     if (!res.ok) {
-      const mapped = mapDriveError(res.status);
-      throw new DriveError(res.status, mapped.code, mapped.message, mapped.retriable);
+      throw await driveErrorFromResponse(res);
     }
 
     const location = res.headers.get('Location');
@@ -1161,7 +1321,7 @@ export async function queryResumableOffset(
   resumableUri: string,
   fileSize: number
 ): Promise<number> {
-  const res = await fetch(resumableUri, {
+  const res = await driveFetch(resumableUri, {
     method: 'PUT',
     headers: {
       'Content-Range': `bytes */${fileSize}`,
@@ -1198,7 +1358,7 @@ export async function uploadChunk(
   totalSize: number | '*'
 ): Promise<Response> {
   const endByte = startByte + chunk.byteLength - 1;
-  return await fetch(resumableUri, {
+  return await driveFetch(resumableUri, {
     method: 'PUT',
     headers: {
       'Content-Range': `bytes ${startByte}-${endByte}/${totalSize}`,
@@ -1220,7 +1380,7 @@ export async function finalizeUnknownSizeUpload(
   resumableUri: string,
   totalSize: number
 ): Promise<Response> {
-  return await fetch(resumableUri, {
+  return await driveFetch(resumableUri, {
     method: 'PUT',
     headers: {
       'Content-Range': `bytes */${totalSize}`,
