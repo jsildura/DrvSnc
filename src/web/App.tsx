@@ -42,16 +42,6 @@ function DashboardShell() {
         </svg>
       ),
     },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: ({ className }) => (
-        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      ),
-    },
   ];
 
   return (
@@ -111,21 +101,39 @@ function DashboardShell() {
 
             {user && (
               <div
+                role="button"
+                tabIndex={0}
+                title="Settings"
+                aria-label="User profile settings"
                 onClick={() => setActiveTab('settings')}
-                className="flex items-center gap-2.5 p-1 pr-3 rounded-2xl hover:bg-slate-100 dark:hover:bg-slate-800/80 cursor-pointer transition-colors"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setActiveTab('settings');
+                  }
+                }}
+                className={`flex items-center gap-2 rounded-full sm:rounded-2xl cursor-pointer transition-all border ${
+                  activeTab === 'settings'
+                    ? 'bg-slate-200/80 dark:bg-slate-800 border-accent'
+                    : 'border-transparent hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                }`}
               >
                 {user.picture ? (
                   <img
                     src={user.picture}
                     alt={user.name || user.email}
-                    className="w-8 h-8 rounded-full border border-slate-200 dark:border-slate-700 object-cover"
+                    className={`w-8 h-8 rounded-full border object-cover transition-colors ${
+                      activeTab === 'settings'
+                        ? 'border-accent'
+                        : 'border-slate-200 dark:border-slate-700'
+                    }`}
                   />
                 ) : (
                   <div className="w-8 h-8 rounded-full bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-xs">
                     {user.name ? user.name[0].toUpperCase() : user.email[0].toUpperCase()}
                   </div>
                 )}
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 hidden sm:inline-block max-w-[120px] truncate">
+                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 hidden sm:inline-block max-w-[120px] truncate pr-2.5">
                   {user.name || user.email}
                 </span>
               </div>
@@ -183,7 +191,7 @@ function DashboardShell() {
 
       {/* Mobile Bottom Navigation Bar */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/65 dark:bg-slate-900/65 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] dark:shadow-[0_-4px_24px_rgba(0,0,0,0.45)] pb-[env(safe-area-inset-bottom,0px)]">
-        <div className="grid grid-cols-4 h-16">
+        <div className="grid grid-cols-3 h-16">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;

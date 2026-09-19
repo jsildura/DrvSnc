@@ -422,7 +422,6 @@ export default function FilePreview({
   const [activeTab, setActiveTab] = useState<'preview' | 'raw'>('preview');
 
   // Video state
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const [videoContainerWidth, setVideoContainerWidth] = useState<number>(() =>
     typeof window !== 'undefined' ? window.innerWidth : 0
@@ -739,7 +738,7 @@ export default function FilePreview({
       };
     }
 
-    // 7. Video — rendered by Drive in a cross-origin iframe (or direct video player).
+    // 7. Video — rendered by Drive in a cross-origin iframe.
     if (previewKind === 'video') {
       const timer = setTimeout(() => {
         if (isSubscribed) setLoading(false);
@@ -1652,46 +1651,35 @@ export default function FilePreview({
                   : undefined
               }
             >
-              {fileId ? (
-                <iframe
-                  src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
-                  title={fileName}
-                  className="border-none"
-                  allow="autoplay; encrypted-media; fullscreen"
-                  onLoad={() => setLoading(false)}
-                  style={{
-                    ...(isScaling
-                      ? {
-                          position: isFullscreen ? 'fixed' : 'absolute',
-                          top: isFullscreen ? `${topOffset}px` : 0,
-                          left: isFullscreen ? `${leftOffset}px` : 0,
-                          width: `${BASE_VIDEO_WIDTH}px`,
-                          height: `${BASE_VIDEO_HEIGHT}px`,
-                          transform: `scale(${videoScale})`,
-                          transformOrigin: '0 0',
-                          maxWidth: 'none',
-                          maxHeight: 'none',
-                          zIndex: isFullscreen ? 99999 : undefined,
-                        }
-                      : {
-                          width: '100%',
-                          height: '100%',
-                        }),
-                    '--video-scale': videoScale,
-                    '--video-top': `${topOffset}px`,
-                    '--video-left': `${leftOffset}px`,
-                  } as unknown as React.CSSProperties}
-                />
-              ) : (
-                <video
-                  ref={videoRef}
-                  src={fileUrl}
-                  controls
-                  playsInline
-                  className="w-full h-full object-contain"
-                  onLoadedMetadata={() => setLoading(false)}
-                />
-              )}
+              <iframe
+                src={`https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`}
+                title={fileName}
+                className="border-none"
+                allow="autoplay; encrypted-media; fullscreen"
+                onLoad={() => setLoading(false)}
+                style={{
+                  ...(isScaling
+                    ? {
+                        position: isFullscreen ? 'fixed' : 'absolute',
+                        top: isFullscreen ? `${topOffset}px` : 0,
+                        left: isFullscreen ? `${leftOffset}px` : 0,
+                        width: `${BASE_VIDEO_WIDTH}px`,
+                        height: `${BASE_VIDEO_HEIGHT}px`,
+                        transform: `scale(${videoScale})`,
+                        transformOrigin: '0 0',
+                        maxWidth: 'none',
+                        maxHeight: 'none',
+                        zIndex: isFullscreen ? 99999 : undefined,
+                      }
+                    : {
+                        width: '100%',
+                        height: '100%',
+                      }),
+                  '--video-scale': videoScale,
+                  '--video-top': `${topOffset}px`,
+                  '--video-left': `${leftOffset}px`,
+                } as unknown as React.CSSProperties}
+              />
             </div>
           )}
 

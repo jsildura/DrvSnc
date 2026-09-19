@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { App } from '../../src/web/App';
 
 describe('Web Client Application Shell (<App />)', () => {
@@ -89,9 +89,12 @@ describe('Web Client Application Shell (<App />)', () => {
       expect(screen.getByText('Google Drive Explorer')).toBeDefined();
     });
 
-    // Switch to Settings tab
-    const settingsTabs = screen.getAllByText('Settings');
-    fireEvent.click(settingsTabs[0]);
+    // Separate Settings nav tab should no longer exist in navigation bar
+    expect(within(screen.getByRole('navigation')).queryByText('Settings')).toBeNull();
+
+    // Switch to Settings tab via user profile chip
+    const profileChip = screen.getByText('Test User');
+    fireEvent.click(profileChip);
 
     await waitFor(() => {
       expect(screen.getByText('Connected Account')).toBeDefined();

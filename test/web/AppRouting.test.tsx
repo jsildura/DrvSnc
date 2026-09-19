@@ -114,7 +114,7 @@ describe('Dashboard URL routing', () => {
       expect(window.location.pathname).toBe('/drive');
     });
 
-    fireEvent.click(screen.getAllByText('Settings')[0]);
+    fireEvent.click(screen.getByText('Test User'));
     await waitFor(() => {
       expect(screen.getByText('Appearance')).toBeDefined();
       expect(window.location.pathname).toBe('/settings');

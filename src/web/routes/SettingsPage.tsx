@@ -138,69 +138,80 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Settings</h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+    <div className="flex flex-col gap-6 sm:gap-8 max-w-3xl mx-auto pb-12">
+      {/* Header */}
+      <div className="space-y-1.5">
+        <h1 className="text-2xl sm:text-3xl font-normal tracking-tight text-slate-900 dark:text-slate-100">
+          Settings
+        </h1>
+        <p className="text-sm text-slate-600 dark:text-slate-400">
           Manage your account preferences, appearance, upload templates, and Google Drive access.
         </p>
       </div>
 
-      {/* Account Profile Card */}
+      {/* Connected Account Card */}
       {isLoading ? (
         <div
-          className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4 animate-pulse"
+          className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-xs flex flex-col gap-5 animate-pulse"
           aria-label="Loading connected account"
           data-testid="account-loading-skeleton"
         >
-          <div className="h-4 w-36 rounded bg-slate-200/80 dark:bg-slate-800/80" />
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="h-4 w-36 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-slate-200/80 dark:bg-slate-800/80 shrink-0" />
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <div className="h-4 w-28 rounded bg-slate-200/80 dark:bg-slate-800/80" />
+                  <div className="h-4 w-28 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
                   <div className="h-4 w-16 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
                 </div>
-                <div className="h-3 w-40 rounded bg-slate-200/50 dark:bg-slate-800/50" />
+                <div className="h-3 w-40 rounded-full bg-slate-200/50 dark:bg-slate-800/50" />
               </div>
             </div>
-            <div className="h-9 w-24 rounded-xl bg-slate-200/60 dark:bg-slate-800/60 shrink-0" />
+            <div className="h-10 w-28 rounded-full bg-slate-200/60 dark:bg-slate-800/60 shrink-0" />
           </div>
         </div>
       ) : (
-        <div className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4">
-          <h3 className="text-base font-semibold text-slate-900 dark:text-white">Connected Account</h3>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-xs flex flex-col gap-5 hover:shadow-sm transition-shadow">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold tracking-tight text-slate-900 dark:text-white">
+              Connected Account
+            </h2>
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
             <div className="flex items-center gap-4">
               {user?.picture ? (
                 <img
                   src={user.picture}
                   alt={user.name || user.email}
-                  className="w-12 h-12 rounded-full border border-slate-200 dark:border-slate-700 object-cover"
+                  className="w-12 h-12 rounded-full border border-slate-200 dark:border-slate-700 object-cover shrink-0"
                 />
               ) : (
-                <div className="w-12 h-12 rounded-full bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-lg">
-                  {user?.name ? user.name[0].toUpperCase() : user?.email[0].toUpperCase()}
+                <div className="w-12 h-12 rounded-full bg-accent-light text-accent dark:bg-accent-dark dark:text-accent-textDark flex items-center justify-center font-bold text-lg ring-1 ring-accent-border shrink-0">
+                  {user?.name ? user.name[0].toUpperCase() : user?.email ? user.email[0].toUpperCase() : 'U'}
                 </div>
               )}
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-sm font-semibold text-slate-900 dark:text-white">{user?.name}</p>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-900/40">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     Connected
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400">{user?.email}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{user?.email}</p>
               </div>
             </div>
 
             <button
               type="button"
               onClick={logout}
-              className="py-2 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors shrink-0"
+              className="min-h-[40px] py-2 px-5 rounded-full border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all shrink-0 flex items-center justify-center gap-1.5 cursor-pointer focus-visible:outline-2 focus-visible:outline-accent w-full sm:w-auto"
             >
-              Sign Out
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span>Sign Out</span>
             </button>
           </div>
         </div>
@@ -209,14 +220,14 @@ export function SettingsPage() {
       {/* Seedr.cc Cloud Torrent Integration Card */}
       {seedrLoading ? (
         <div
-          className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4 animate-pulse"
+          className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-xs flex flex-col gap-5 animate-pulse"
           aria-label="Loading Seedr settings"
           data-testid="seedr-loading-skeleton"
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <div className="h-5 w-48 rounded bg-slate-200/80 dark:bg-slate-800/80 mb-1.5" />
-              <div className="h-3.5 w-64 sm:w-80 rounded bg-slate-200/50 dark:bg-slate-800/50" />
+              <div className="h-5 w-48 rounded-full bg-slate-200/80 dark:bg-slate-800/80 mb-1.5" />
+              <div className="h-3.5 w-64 sm:w-80 rounded-full bg-slate-200/50 dark:bg-slate-800/50" />
             </div>
             <div className="flex items-center gap-2">
               <div className="h-6 w-20 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
@@ -224,34 +235,36 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="flex items-center justify-between pt-2">
-            <div className="h-4 w-48 sm:w-56 rounded bg-slate-200/60 dark:bg-slate-800/60" />
-            <div className="h-8 w-28 rounded-xl bg-slate-200/60 dark:bg-slate-800/60" />
+            <div className="h-4 w-48 sm:w-56 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
+            <div className="h-9 w-28 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
           </div>
         </div>
       ) : (
-        <div className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-xs flex flex-col gap-5 hover:shadow-sm transition-shadow">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
                 Seedr.cc Torrent Downloader
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                 Powers remote Magnet link & torrent file downloads directly to Google Drive.
               </p>
             </div>
 
             {seedrStatus.connected && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {seedrStatus.isPremium ? (
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50 uppercase tracking-wider">
-                    ★ {seedrStatus.packageName || 'Premium'}
+                  <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50 uppercase tracking-wider flex items-center gap-1">
+                    <span>★</span>
+                    <span>{seedrStatus.packageName || 'Premium'}</span>
                   </span>
                 ) : (
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
                     Non-Premium
                   </span>
                 )}
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 w-fit">
+                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-900/40 w-fit flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   Connected ({formatBytes(seedrStatus.spaceUsed)} / {formatBytes(seedrStatus.spaceMax)})
                 </span>
               </div>
@@ -259,23 +272,49 @@ export function SettingsPage() {
           </div>
 
           {seedrStatus.connected ? (
-            <div className="flex items-center justify-between pt-2">
-              <div className="text-xs text-slate-600 dark:text-slate-400">
-                <span className="font-semibold text-slate-800 dark:text-slate-200">Account:</span> {seedrStatus.username || seedrStatus.email || 'Seedr User'} ({seedrStatus.isPremium ? seedrStatus.packageName || 'Premium' : 'Free Tier'})
+            <div className="space-y-4 pt-1">
+              {seedrStatus.spaceMax && seedrStatus.spaceMax > 0 ? (
+                <div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">
+                    <span>Storage Quota</span>
+                    <span>
+                      {Math.round(((seedrStatus.spaceUsed || 0) / seedrStatus.spaceMax) * 100)}% used
+                    </span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500 ease-out bg-emerald-500"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(2, (((seedrStatus.spaceUsed || 0) / seedrStatus.spaceMax) * 100))
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                <div className="text-xs text-slate-600 dark:text-slate-400">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">Account:</span>{' '}
+                  {seedrStatus.username || seedrStatus.email || 'Seedr User'} (
+                  {seedrStatus.isPremium ? seedrStatus.packageName || 'Premium' : 'Free Tier'})
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDisconnectSeedr}
+                  className="min-h-[36px] py-1.5 px-4 rounded-full border border-rose-300 dark:border-rose-900/70 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-all cursor-pointer w-fit"
+                >
+                  Disconnect Seedr
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleDisconnectSeedr}
-                className="py-1.5 px-3 rounded-xl border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors"
-              >
-                Disconnect Seedr
-              </button>
             </div>
           ) : (
-            <form onSubmit={handleSeedrLogin} className="space-y-3 pt-1 max-w-md">
-              <div className="space-y-2">
+            <form onSubmit={handleSeedrLogin} className="flex flex-col gap-4 pt-2 max-w-md">
+              <div className="flex flex-col gap-3.5">
                 <div>
-                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     Seedr Email / Username
                   </label>
                   <input
@@ -284,11 +323,11 @@ export function SettingsPage() {
                     value={seedrEmail}
                     onChange={(e) => setSeedrEmail(e.target.value)}
                     placeholder="your-email@example.com"
-                    className="mt-1 w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full text-xs sm:text-sm px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     Seedr Password
                   </label>
                   <input
@@ -297,16 +336,16 @@ export function SettingsPage() {
                     value={seedrPassword}
                     onChange={(e) => setSeedrPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="mt-1 w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full text-xs sm:text-sm px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 pt-1">
+              <div className="flex items-center gap-3.5 pt-1">
                 <button
                   type="submit"
                   disabled={isSeedrLoggingIn || !seedrEmail.trim() || !seedrPassword.trim()}
-                  className="py-2.5 px-4 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-50 text-accent-contrast text-xs font-semibold shadow-sm transition-colors flex items-center gap-2"
+                  className="min-h-[40px] py-2 px-5 rounded-full bg-accent hover:bg-accent-hover active:bg-accent-active disabled:opacity-50 text-accent-contrast text-xs sm:text-sm font-semibold shadow-xs transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                 >
                   <span>{isSeedrLoggingIn ? 'Connecting...' : 'Connect Seedr Account'}</span>
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -317,7 +356,7 @@ export function SettingsPage() {
                   href="https://www.seedr.cc"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[11px] text-accent dark:text-accent-textDark underline font-medium"
+                  className="text-xs text-accent dark:text-accent-textDark underline font-medium hover:opacity-80 transition-opacity"
                 >
                   Register free
                 </a>
@@ -326,10 +365,22 @@ export function SettingsPage() {
           )}
 
           {seedrActionMsg && (
-            <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">{seedrActionMsg}</p>
+            <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 text-xs font-medium flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>{seedrActionMsg}</span>
+            </div>
           )}
           {seedrErrorMsg && (
-            <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">{seedrErrorMsg}</p>
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900/50 text-xs font-medium flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span>{seedrErrorMsg}</span>
+            </div>
           )}
         </div>
       )}
@@ -337,66 +388,87 @@ export function SettingsPage() {
       {/* Appearance Card */}
       {isLoading ? (
         <div
-          className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-6 animate-pulse"
+          className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-xs flex flex-col gap-6 animate-pulse"
           aria-label="Loading appearance settings"
           data-testid="appearance-loading-skeleton"
         >
           <div>
-            <div className="h-5 w-28 rounded bg-slate-200/80 dark:bg-slate-800/80 mb-1.5" />
-            <div className="h-3.5 w-72 rounded bg-slate-200/50 dark:bg-slate-800/50 mb-3" />
-            <div className="h-3.5 w-20 rounded bg-slate-200/70 dark:bg-slate-800/70 mb-2" />
+            <div className="h-5 w-28 rounded-full bg-slate-200/80 dark:bg-slate-800/80 mb-2" />
+            <div className="h-3.5 w-72 rounded-full bg-slate-200/50 dark:bg-slate-800/50 mb-4" />
+            <div className="h-3.5 w-20 rounded-full bg-slate-200/70 dark:bg-slate-800/70 mb-2.5" />
             <div className="grid grid-cols-3 gap-3">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="h-11 rounded-2xl bg-slate-200/60 dark:bg-slate-800/60" />
+                <div key={i} className="h-11 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
               ))}
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800/80">
-            <div className="flex items-center justify-between mb-2">
+          <div className="pt-5 border-t border-slate-100 dark:border-slate-800/80">
+            <div className="flex items-center justify-between mb-2.5">
               <div>
-                <div className="h-3.5 w-24 rounded bg-slate-200/70 dark:bg-slate-800/70 mb-1" />
-                <div className="h-3 w-80 max-w-full rounded bg-slate-200/50 dark:bg-slate-800/50" />
+                <div className="h-3.5 w-24 rounded-full bg-slate-200/70 dark:bg-slate-800/70 mb-1" />
+                <div className="h-3 w-80 max-w-full rounded-full bg-slate-200/50 dark:bg-slate-800/50" />
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2.5 pt-1.5">
+            <div className="flex flex-wrap items-center gap-3 pt-2">
               {[...Array(8)].map((_, i) => (
-                <div key={i} className="w-8 h-8 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
+                <div key={i} className="w-10 h-10 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
               ))}
             </div>
           </div>
         </div>
       ) : (
-        <div className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-6">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Appearance</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">Choose how the application and themes look on your device.</p>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">Theme Mode</label>
-            <div className="grid grid-cols-3 gap-3">
-              {(['system', 'light', 'dark'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => {
-                    setTheme(mode);
-                    updatePreferences({ themeMode: mode }).catch((err) => {
-                      console.error('Failed to update theme mode on server:', err);
-                    });
-                  }}
-                  className={`p-3 rounded-2xl border text-sm font-medium capitalize transition-all ${theme === mode
-                    ? 'border-accent bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark shadow-xs'
-                    : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-700 dark:text-slate-300'
+        <div className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-xs flex flex-col gap-6 hover:shadow-sm transition-shadow">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">Appearance</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Choose how the application and themes look on your device.
+            </p>
+          </div>
+
+          {/* M3 Segmented Button Group for Theme Mode */}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Theme Mode
+            </label>
+            <div
+              className="m3-segmented-button-group border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-950/60 p-1"
+              role="group"
+              aria-label="Theme mode selection"
+            >
+              {(['system', 'light', 'dark'] as const).map((mode) => {
+                const isSelected = theme === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setTheme(mode);
+                      updatePreferences({ themeMode: mode }).catch((err) => {
+                        console.error('Failed to update theme mode on server:', err);
+                      });
+                    }}
+                    className={`m3-segmented-button capitalize ${
+                      isSelected
+                        ? 'bg-accent text-accent-contrast shadow-xs'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800/60'
                     }`}
-                >
-                  {mode}
-                </button>
-              ))}
+                  >
+                    {isSelected && (
+                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                    <span>{mode}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Accent Color Customization */}
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800/80">
-            <div className="flex items-center justify-between mb-2">
+          <div className="pt-6 border-t border-slate-100 dark:border-slate-800/80 space-y-3">
+            <div className="flex items-center justify-between">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
                   Accent Color
@@ -414,7 +486,7 @@ export function SettingsPage() {
                       console.error('Failed to update accent color on server:', err);
                     });
                   }}
-                  className="text-[11px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 underline transition-colors"
+                  className="text-xs font-medium text-accent dark:text-accent-textDark hover:underline transition-colors cursor-pointer"
                 >
                   Reset
                 </button>
@@ -422,7 +494,7 @@ export function SettingsPage() {
             </div>
 
             {/* Preset Swatches & Custom Picker */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-1.5">
+            <div className="flex flex-wrap items-center gap-3.5 pt-1">
               {ACCENT_PRESETS.map((preset) => {
                 const isSelected =
                   accentColor.toLowerCase() === preset.hex.toLowerCase() ||
@@ -439,10 +511,11 @@ export function SettingsPage() {
                     }}
                     title={preset.name}
                     aria-label={`Select ${preset.name} accent`}
-                    className={`group relative w-8 h-8 rounded-full flex items-center justify-center transition-all ${isSelected
-                      ? 'ring-2 ring-offset-2 ring-slate-900 dark:ring-white dark:ring-offset-slate-900 scale-110 shadow-sm'
-                      : 'hover:scale-105 opacity-90 hover:opacity-100'
-                      }`}
+                    className={`group relative w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                      isSelected
+                        ? 'ring-2 ring-offset-2 ring-accent dark:ring-offset-slate-900 scale-110 shadow-sm'
+                        : 'hover:scale-105 opacity-90 hover:opacity-100 shadow-xs'
+                    }`}
                     style={{ backgroundColor: preset.hex }}
                   >
                     {isSelected && (
@@ -466,7 +539,7 @@ export function SettingsPage() {
                 <label
                   title="Custom color"
                   aria-label="Pick custom accent color"
-                  className="w-8 h-8 rounded-full border border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center cursor-pointer hover:border-slate-400 dark:hover:border-slate-500 overflow-hidden relative shadow-xs transition-all"
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center cursor-pointer hover:border-accent overflow-hidden relative shadow-xs transition-all"
                   style={{ backgroundColor: accentColor }}
                 >
                   <input
@@ -493,40 +566,47 @@ export function SettingsPage() {
       {/* Upload & Notification Preferences Form */}
       {isLoading ? (
         <div
-          className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4 animate-pulse"
+          className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-xs flex flex-col gap-6 animate-pulse"
           aria-label="Loading upload preferences"
           data-testid="upload-preferences-loading-skeleton"
         >
-          <div className="h-5 w-40 rounded bg-slate-200/80 dark:bg-slate-800/80" />
+          <div className="h-5 w-40 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
 
-          <div>
-            <div className="h-3.5 w-36 rounded bg-slate-200/70 dark:bg-slate-800/70 mb-1.5" />
+          <div className="space-y-2">
+            <div className="h-3.5 w-36 rounded-full bg-slate-200/70 dark:bg-slate-800/70" />
             <div className="h-10 w-full rounded-xl bg-slate-200/60 dark:bg-slate-800/60" />
-            <div className="h-3 w-56 rounded bg-slate-200/50 dark:bg-slate-800/50 mt-1.5" />
+            <div className="h-3 w-56 rounded-full bg-slate-200/50 dark:bg-slate-800/50" />
           </div>
 
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-slate-200/80 dark:bg-slate-800/80 shrink-0" />
-              <div className="h-4 w-64 rounded bg-slate-200/60 dark:bg-slate-800/60" />
+          <div className="space-y-4 pt-1">
+            <div className="flex items-center justify-between">
+              <div className="h-4 w-64 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
+              <div className="w-12 h-7 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-slate-200/80 dark:bg-slate-800/80 shrink-0" />
-              <div className="h-4 w-60 rounded bg-slate-200/60 dark:bg-slate-800/60" />
+            <div className="flex items-center justify-between">
+              <div className="h-4 w-60 rounded-full bg-slate-200/60 dark:bg-slate-800/60" />
+              <div className="w-12 h-7 rounded-full bg-slate-200/80 dark:bg-slate-800/80" />
             </div>
           </div>
 
-          <div className="h-10 w-full rounded-xl bg-slate-200/70 dark:bg-slate-800/70" />
+          <div className="h-11 w-full sm:w-44 rounded-full bg-slate-200/70 dark:bg-slate-800/70" />
         </div>
       ) : (
         <form
           onSubmit={handleSavePreferences}
-          className="p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl shadow-sm space-y-4"
+          className="p-6 sm:p-7 rounded-3xl border border-slate-200/90 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-xs flex flex-col gap-6 hover:shadow-sm transition-shadow"
         >
-          <h3 className="text-base font-semibold text-slate-900 dark:text-white">Upload Preferences</h3>
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+              Upload Preferences
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Customize upload filenames, transfer alerts, and local credential memory.
+            </p>
+          </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
               Filename Template Pattern
             </label>
             <input
@@ -534,99 +614,193 @@ export function SettingsPage() {
               value={filenamePattern}
               onChange={(e) => setFilenamePattern(e.target.value)}
               placeholder="{filename}"
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-800/50 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 text-sm focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all font-mono"
             />
-            <p className="text-[11px] text-slate-400 mt-1">
-              Use variables like {'{filename}'}, {'{date}'}, or {'{timestamp}'}
-            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              <span className="text-[11px] text-slate-400">Quick insert:</span>
+              {['{filename}', '{date}', '{timestamp}'].map((variable) => (
+                <button
+                  key={variable}
+                  type="button"
+                  onClick={() => {
+                    if (!filenamePattern.includes(variable)) {
+                      setFilenamePattern((prev) => (prev ? `${prev}-${variable}` : variable));
+                    }
+                  }}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-accent-light hover:text-accent dark:hover:bg-accent-dark dark:hover:text-accent-textDark transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
+                >
+                  + {variable}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="space-y-3 pt-2">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={notificationsEnabled}
-                onChange={(e) => setNotificationsEnabled(e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-              />
-              <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                Enable transfer completion notifications
-              </span>
+          {/* Material 3 Interactive Switch Controls */}
+          <div className="space-y-3 pt-1">
+            {/* Notifications Switch */}
+            <label className="flex items-center justify-between gap-4 p-3.5 sm:p-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer select-none">
+              <div className="space-y-1">
+                <span className="text-sm font-medium text-slate-800 dark:text-slate-200 block">
+                  Enable transfer completion notifications
+                </span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                  Receive system alerts when background Drive uploads and torrent conversions finish.
+                </span>
+              </div>
+              <div className="relative shrink-0">
+                <input
+                  type="checkbox"
+                  checked={notificationsEnabled}
+                  onChange={(e) => setNotificationsEnabled(e.target.checked)}
+                  className="sr-only"
+                />
+                <div
+                  className={`m3-switch-track ${
+                    notificationsEnabled
+                      ? 'bg-accent border-accent'
+                      : 'bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-600'
+                  }`}
+                >
+                  <div
+                    className={`m3-switch-thumb ${
+                      notificationsEnabled
+                        ? 'left-[24px] w-6 h-6 bg-accent-contrast text-accent shadow-xs'
+                        : 'left-[4px] w-4 h-4 bg-slate-500 dark:bg-slate-400'
+                    }`}
+                  >
+                    {notificationsEnabled && (
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                </div>
+              </div>
             </label>
 
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rememberAccount}
-                onChange={(e) => setRememberAccount(e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-              />
-              <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                Remember account hint on this device
-              </span>
+            {/* Remember Account Switch */}
+            <label className="flex items-center justify-between gap-4 p-3.5 sm:p-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer select-none">
+              <div className="space-y-1">
+                <span className="text-sm font-medium text-slate-800 dark:text-slate-200 block">
+                  Remember account hint on this device
+                </span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                  Persists your account email for seamless one-click reauthentication.
+                </span>
+              </div>
+              <div className="relative shrink-0">
+                <input
+                  type="checkbox"
+                  aria-label="Remember account hint on this device"
+                  checked={rememberAccount}
+                  onChange={(e) => setRememberAccount(e.target.checked)}
+                  className="sr-only"
+                />
+                <div
+                  className={`m3-switch-track ${
+                    rememberAccount
+                      ? 'bg-accent border-accent'
+                      : 'bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-600'
+                  }`}
+                >
+                  <div
+                    className={`m3-switch-thumb ${
+                      rememberAccount
+                        ? 'left-[24px] w-6 h-6 bg-accent-contrast text-accent shadow-xs'
+                        : 'left-[4px] w-4 h-4 bg-slate-500 dark:bg-slate-400'
+                    }`}
+                  >
+                    {rememberAccount && (
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                </div>
+              </div>
             </label>
           </div>
 
           {saveStatus && (
-            <p className="text-xs font-medium text-accent dark:text-accent-textDark">{saveStatus}</p>
+            <div className="p-3.5 rounded-2xl bg-accent-light dark:bg-accent-dark text-accent dark:text-accent-textDark text-xs font-medium border border-accent-border flex items-center gap-2 animate-fade-in">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>{saveStatus}</span>
+            </div>
           )}
 
-          <button
-            type="submit"
-            className="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-accent-hover text-accent-contrast text-sm font-medium shadow-sm transition-colors"
-          >
-            Save Preferences
-          </button>
+          <div className="pt-2">
+            <button
+              type="submit"
+              className="w-full sm:w-auto min-h-[44px] px-8 rounded-full bg-accent hover:bg-accent-hover active:bg-accent-active text-accent-contrast font-medium text-sm transition-all shadow-xs hover:shadow flex items-center justify-center gap-2 cursor-pointer focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <span>Save Preferences</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </button>
+          </div>
         </form>
       )}
 
       {/* Danger Zone */}
       {isLoading ? (
         <div
-          className="p-6 rounded-3xl border border-rose-200/80 dark:border-rose-950 bg-rose-50/30 dark:bg-rose-950/20 backdrop-blur-xl shadow-sm animate-pulse"
+          className="p-6 sm:p-7 rounded-3xl border border-rose-200/80 dark:border-rose-950 bg-rose-50/30 dark:bg-rose-950/20 shadow-xs flex flex-col gap-4 animate-pulse"
           aria-label="Loading danger zone"
           data-testid="danger-zone-loading-skeleton"
         >
-          <div className="h-5 w-28 rounded bg-rose-200/70 dark:bg-rose-900/50 mb-2" />
-          <div className="h-3.5 w-80 max-w-full rounded bg-rose-200/50 dark:bg-rose-900/30 mb-4" />
-          <div className="h-9 w-56 rounded-xl bg-rose-200/60 dark:bg-rose-900/40" />
+          <div className="h-5 w-28 rounded-full bg-rose-200/70 dark:bg-rose-900/50 mb-2" />
+          <div className="h-3.5 w-80 max-w-full rounded-full bg-rose-200/50 dark:bg-rose-900/30 mb-4" />
+          <div className="h-10 w-56 rounded-full bg-rose-200/60 dark:bg-rose-900/40" />
         </div>
       ) : (
-        <div className="p-6 rounded-3xl border border-rose-200/80 dark:border-rose-950 bg-rose-50/30 dark:bg-rose-950/20 backdrop-blur-xl shadow-sm">
-          <h3 className="text-base font-semibold text-rose-600 dark:text-rose-400 mb-1">Danger Zone</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-            Permanently delete your account, session credentials, and revoke Google Drive OAuth permissions.
-          </p>
+        <div className="p-6 sm:p-7 rounded-3xl border border-rose-200/90 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20 shadow-xs flex flex-col gap-5">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-rose-700 dark:text-rose-400">Danger Zone</h2>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              Permanently delete your account, session credentials, and revoke Google Drive OAuth permissions.
+            </p>
+          </div>
 
           {confirmDelete ? (
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-rose-600 dark:text-rose-400">
-                Are you sure? This action cannot be undone.
-              </p>
-              <div className="flex items-center gap-3">
+            <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 space-y-3.5">
+              <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 text-sm font-medium">
+                <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span>Are you sure? This action cannot be undone.</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 pt-1">
                 <button
+                  type="button"
                   disabled={isDeleting}
                   onClick={handleDelete}
-                  className="py-2 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-medium transition-colors"
+                  className="min-h-[40px] py-2 px-6 rounded-full bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-sm font-medium transition-all shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {isDeleting ? 'Deleting...' : 'Yes, Delete Account'}
                 </button>
                 <button
+                  type="button"
                   disabled={isDeleting}
                   onClick={() => setConfirmDelete(false)}
-                  className="py-2 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-colors"
+                  className="min-h-[40px] py-2 px-5 rounded-full border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-all cursor-pointer"
                 >
                   Cancel
                 </button>
               </div>
             </div>
           ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="py-2 px-4 rounded-xl bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 text-sm font-medium transition-colors"
-            >
-              Delete Account & Revoke Access
-            </button>
+            <div>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="min-h-[40px] py-2 px-5 rounded-full bg-rose-600/10 hover:bg-rose-600/20 text-rose-700 dark:text-rose-400 border border-rose-300 dark:border-rose-900/60 text-sm font-semibold transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-rose-500"
+              >
+                Delete Account & Revoke Access
+              </button>
+            </div>
           )}
         </div>
       )}

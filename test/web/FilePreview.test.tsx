@@ -684,4 +684,21 @@ describe('Native Google Drive File Preview Component (<FilePreview />)', () => {
     expect(screen.getByText('Open in Google Slides')).toBeDefined();
     expect(screen.getByText('Download')).toBeDefined();
   });
+
+  it('always renders the native Google Drive preview iframe for video playback without a video tag fallback', () => {
+    render(
+      <FilePreview
+        open={true}
+        onClose={vi.fn()}
+        fileId="video-123"
+        fileName="presentation_recording.mp4"
+        mimeType="video/mp4"
+      />
+    );
+
+    const iframe = document.querySelector('iframe[title="presentation_recording.mp4"]');
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute('src')).toBe('https://drive.google.com/file/d/video-123/preview');
+    expect(document.querySelector('video')).toBeNull();
+  });
 });

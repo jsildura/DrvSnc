@@ -16,6 +16,27 @@
     --color-accent-border: rgba(99, 102, 241, 0.35);
     --color-accent-ring: rgba(79, 70, 229, 0.45);
     --color-accent-btn-border: transparent;
+
+    /* Material 3 Shape scale */
+    --md-sys-shape-corner-none: 0px;
+    --md-sys-shape-corner-extra-small: 4px;
+    --md-sys-shape-corner-small: 8px;
+    --md-sys-shape-corner-medium: 12px;
+    --md-sys-shape-corner-large: 16px;
+    --md-sys-shape-corner-extra-large: 24px;
+    --md-sys-shape-corner-full: 9999px;
+
+    /* Material 3 Motion tokens */
+    --md-sys-motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+    --md-sys-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+    --md-sys-motion-duration-short2: 100ms;
+    --md-sys-motion-duration-short4: 200ms;
+    --md-sys-motion-duration-medium2: 300ms;
+
+    /* Material 3 State layer opacity */
+    --md-sys-state-hover: 0.08;
+    --md-sys-state-focus: 0.12;
+    --md-sys-state-pressed: 0.12;
   }
 
   html {
@@ -32,6 +53,55 @@
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     transition-duration: 250ms;
   }
+}
+
+/* Material 3 Interactive Switch Styles */
+.m3-switch-track {
+  width: 52px;
+  height: 32px;
+  border-radius: 9999px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 2px solid;
+  transition: all var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+
+.m3-switch-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-emphasized);
+}
+
+/* Material 3 Segmented Button Group */
+.m3-segmented-button-group {
+  display: inline-flex;
+  width: 100%;
+  border-radius: 9999px;
+  padding: 4px;
+  border: 1px solid;
+}
+
+.m3-segmented-button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+  cursor: pointer;
 }
 
 /* Smooth glassmorphic scrollbar */
@@ -88,11 +158,6 @@ iframe:-moz-full-screen {
   }
 }
 
-/* Remove margin-top from space-y-6 */
-.space-y-6 > :not([hidden]) ~ :not([hidden]) {
-  margin-top: 0 !important;
-  padding: 10px;
-}
 
 /* Reusable Smooth Animations */
 @keyframes fadeIn {
